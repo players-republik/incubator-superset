@@ -283,12 +283,13 @@ class ImportDatasetsCommand(BaseCommand):
     in Superset.
     """
 
+    # pylint: disable=unused-argument
     def __init__(
         self,
+        *args: Any,
         contents: Dict[str, str],
         sync_columns: bool = False,
         sync_metrics: bool = False,
-        *args: Any,
         **kwargs: Any,
     ):
         self.contents = contents
