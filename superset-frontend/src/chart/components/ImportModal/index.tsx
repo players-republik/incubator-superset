@@ -25,22 +25,22 @@ import {
   StyledInputContainer,
 } from 'src/views/CRUD/data/database/DatabaseModal';
 import { useImportResource } from 'src/views/CRUD/hooks';
-import { DashboardObject } from 'src/views/CRUD/dashboard/types';
+import { ChartObject } from 'src/views/CRUD/chart/types';
 
-export interface ImportDashboardModalProps {
+export interface ImportChartModalProps {
   addDangerToast: (msg: string) => void;
   addSuccessToast: (msg: string) => void;
-  onDashboardImport: () => void;
+  onChartImport: () => void;
   show: boolean;
   onHide: () => void;
   passwordFields?: string[];
   setPasswordFields?: (passwordFields: string[]) => void;
 }
 
-const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
+const ImportChartModal: FunctionComponent<ImportChartModalProps> = ({
   addDangerToast,
   addSuccessToast,
-  onDashboardImport,
+  onChartImport,
   show,
   onHide,
   passwordFields = [],
@@ -68,11 +68,7 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
   const {
     state: { passwordsNeeded },
     importResource,
-  } = useImportResource<DashboardObject>(
-    'dashboard',
-    t('dashboard'),
-    handleErrorMsg,
-  );
+  } = useImportResource<ChartObject>('chart', t('chart'), handleErrorMsg);
 
   useEffect(() => {
     setPasswordFields(passwordsNeeded);
@@ -91,9 +87,9 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
 
     importResource(uploadFile, passwords).then(result => {
       if (result) {
-        addSuccessToast(t('The dashboards have been imported'));
+        addSuccessToast(t('The charts have been imported'));
         clearModal();
-        onDashboardImport();
+        onChartImport();
       }
     });
   };
@@ -115,7 +111,7 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
           <div className="helper">
             {t(
               'The passwords for the databases below are needed in order to ' +
-                'import them together with the dashboards. Please note that the ' +
+                'import them together with the charts. Please note that the ' +
                 '"Secure Extra" and "Certificate" sections of ' +
                 'the database configuration are not present in export files, and ' +
                 'should be added manually after the import if they are needed.',
@@ -150,8 +146,8 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
 
   return (
     <Modal
-      name="dashboard"
-      className="dashboard-modal"
+      name="chart"
+      className="chart-modal"
       disablePrimaryButton={uploadFile === null}
       onHandledPrimaryAction={onUpload}
       onHide={hide}
@@ -160,23 +156,23 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
       show={show}
       title={
         <h4>
-          <StyledIcon name="nav-dashboard" />
-          {t('Import Dashboard')}
+          <StyledIcon name="nav-charts" />
+          {t('Import Chart')}
         </h4>
       }
     >
       <StyledInputContainer>
         <div className="control-label">
-          <label htmlFor="dashboardFile">
+          <label htmlFor="chartFile">
             {t('File')}
             <span className="required">*</span>
           </label>
         </div>
         <input
           ref={fileInputRef}
-          data-test="dashboard-file-input"
-          name="dashboardFile"
-          id="dashboardFile"
+          data-test="chart-file-input"
+          name="chartFile"
+          id="chartFile"
           type="file"
           accept=".yaml,.json,.yml,.zip"
           onChange={changeFile}
@@ -187,4 +183,4 @@ const ImportDashboardModal: FunctionComponent<ImportDashboardModalProps> = ({
   );
 };
 
-export default ImportDashboardModal;
+export default ImportChartModal;

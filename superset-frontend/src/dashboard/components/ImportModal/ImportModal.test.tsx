@@ -22,7 +22,7 @@ import configureStore from 'redux-mock-store';
 import { styledMount as mount } from 'spec/helpers/theming';
 import { ReactWrapper } from 'enzyme';
 
-import ImportChartModal from 'src/chart/components/ImportModal';
+import ImportDashboardModal from 'src/dashboard/components/ImportModal';
 import Modal from 'src/common/components/Modal';
 
 const mockStore = configureStore([thunk]);
@@ -31,16 +31,16 @@ const store = mockStore({});
 const requiredProps = {
   addDangerToast: () => {},
   addSuccessToast: () => {},
-  onChartImport: () => {},
+  onDashboardImport: () => {},
   show: true,
   onHide: () => {},
 };
 
-describe('ImportChartModal', () => {
+describe('ImportDashboardModal', () => {
   let wrapper: ReactWrapper;
 
   beforeEach(() => {
-    wrapper = mount(<ImportChartModal {...requiredProps} />, {
+    wrapper = mount(<ImportDashboardModal {...requiredProps} />, {
       context: { store },
     });
   });
@@ -50,15 +50,15 @@ describe('ImportChartModal', () => {
   });
 
   it('renders', () => {
-    expect(wrapper.find(ImportChartModal)).toExist();
+    expect(wrapper.find(ImportDashboardModal)).toExist();
   });
 
   it('renders a Modal', () => {
     expect(wrapper.find(Modal)).toExist();
   });
 
-  it('renders "Import Chart" header', () => {
-    expect(wrapper.find('h4').text()).toEqual('Import Chart');
+  it('renders "Import Dashboard" header', () => {
+    expect(wrapper.find('h4').text()).toEqual('Import Dashboard');
   });
 
   it('renders a label and a file input field', () => {
@@ -67,7 +67,7 @@ describe('ImportChartModal', () => {
   });
 
   it('should attach the label to the input field', () => {
-    const id = 'chartFile';
+    const id = 'dashboardFile';
     expect(wrapper.find('label').prop('htmlFor')).toBe(id);
     expect(wrapper.find('input').prop('id')).toBe(id);
   });
@@ -83,7 +83,7 @@ describe('ImportChartModal', () => {
   });
 
   it('should render the import button enabled when a file is selected', () => {
-    const file = new File([new ArrayBuffer(1)], 'chart_export.zip');
+    const file = new File([new ArrayBuffer(1)], 'dashboard_export.zip');
     wrapper.find('input').simulate('change', { target: { files: [file] } });
 
     expect(wrapper.find('button[children="Import"]').prop('disabled')).toBe(
@@ -93,7 +93,7 @@ describe('ImportChartModal', () => {
 
   it('should render password fields when needed for import', () => {
     const wrapperWithPasswords = mount(
-      <ImportChartModal
+      <ImportDashboardModal
         {...requiredProps}
         passwordFields={['databases/examples.yaml']}
       />,
