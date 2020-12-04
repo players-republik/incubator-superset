@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { FunctionComponent, useRef, useState } from 'react';
+import React, { FunctionComponent, useEffect, useRef, useState } from 'react';
 import { t } from '@superset-ui/core';
 
 import Modal from 'src/common/components/Modal';
@@ -24,7 +24,7 @@ import {
   StyledIcon,
   StyledInputContainer,
 } from 'src/views/CRUD/data/database/DatabaseModal';
-import { useSingleViewResource } from 'src/views/CRUD/hooks';
+import { useImportResource } from 'src/views/CRUD/hooks';
 import { DatasetObject } from 'src/views/CRUD/data/dataset/types';
 
 export interface ImportDatasetModalProps {
@@ -51,18 +51,6 @@ const ImportDatasetModal: FunctionComponent<ImportDatasetModalProps> = ({
   const [passwords, setPasswords] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { importResource } = useSingleViewResource<DatasetObject>(
-    'dataset',
-    t('dataset'),
-    addDangerToast,
-  );
-
-  // Functions
-  const hide = () => {
-    setIsHidden(true);
-    onHide();
-  };
-
   const clearModal = () => {
     setUploadFile(null);
     setPasswordFields([]);
@@ -72,23 +60,36 @@ const ImportDatasetModal: FunctionComponent<ImportDatasetModalProps> = ({
     }
   };
 
+  const handleErrorMsg = (msg: string) => {
+    clearModal();
+    addDangerToast(msg);
+  };
+
+  const {
+    state: { passwordsNeeded },
+    importResource,
+  } = useImportResource<DatasetObject>('dataset', t('dataset'), handleErrorMsg);
+
+  useEffect(() => {
+    setPasswordFields(passwordsNeeded);
+  }, [passwordsNeeded]);
+
+  // Functions
+  const hide = () => {
+    setIsHidden(true);
+    onHide();
+  };
+
   const onUpload = () => {
     if (uploadFile === null) {
       return;
     }
 
     importResource(uploadFile, passwords).then(result => {
-      if (result === true) {
-        // Success
+      if (result) {
         addSuccessToast(t('The datasets have been imported'));
         clearModal();
         onDatasetImport();
-      } else if (result) {
-        // Need passwords
-        setPasswordFields(result);
-      } else {
-        // Failure
-        clearModal();
       }
     });
   };
@@ -125,6 +126,7 @@ const ImportDatasetModal: FunctionComponent<ImportDatasetModalProps> = ({
             </div>
             <input
               name={`password-${fileName}`}
+              autoComplete="off"
               type="password"
               value={passwords[fileName]}
               onChange={event =>
