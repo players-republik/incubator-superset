@@ -152,8 +152,11 @@ def cancel_github_workflows(
         if head_commit["id"] != last_sha:
             last_sha = head_commit["id"]
             print_commit(head_commit)
-        cancel_run(repo, entry["id"])
-        print(f"[Cancled] {entry['name']}")
+        try:
+            cancel_run(repo, entry["id"])
+            print(f"[Cancled] {entry['name']}")
+        except ClickException as error:
+            print(f"[Cancled] {entry['name']} [Error: {error.message}]")
     print("")
 
 
