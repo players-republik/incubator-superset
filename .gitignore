@@ -84,5 +84,3 @@ apache-superset-*.tar.gz*
 
 # Translation binaries
 messages.mo
-
-docker/requirements-local.txt
