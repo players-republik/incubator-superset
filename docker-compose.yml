@@ -53,7 +53,7 @@ services:
     command: ["/app/docker/docker-bootstrap.sh", "app"]
     restart: unless-stopped
     ports:
-      - 8088:8088
+      - 8080:8088
     user: "root"
     depends_on: *superset-depends-on
     volumes: *superset-volumes
