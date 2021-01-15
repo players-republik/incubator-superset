@@ -131,7 +131,7 @@ SUPERSET_WEBSERVER_PORT = 8088
 # [load balancer / proxy / envoy / kong / ...] timeout settings.
 # You should also make sure to configure your WSGI server
 # (gunicorn, nginx, apache, ...) timeout setting to be <= to this setting
-SUPERSET_WEBSERVER_TIMEOUT = 60
+SUPERSET_WEBSERVER_TIMEOUT = 300
 
 # this 2 settings are used by dashboard period force refresh feature
 # When user choose auto force refresh frequency
@@ -398,7 +398,7 @@ IMG_UPLOAD_URL = "/static/uploads/"
 
 # Default cache timeout (in seconds), applies to all cache backends unless
 # specifically overridden in each cache config.
-CACHE_DEFAULT_TIMEOUT = 60 * 60 * 24  # 1 day
+CACHE_DEFAULT_TIMEOUT = 60 * 60 * 24 * 7 # 1 week
 
 # Default cache for Superset objects
 CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "null"}
