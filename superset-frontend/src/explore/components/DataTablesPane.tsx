@@ -18,12 +18,16 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { styled, t } from '@superset-ui/core';
-import { Collapse } from 'src/common/components';
+import Collapse from 'src/common/components/Collapse';
 import Tabs from 'src/common/components/Tabs';
 import Loading from 'src/components/Loading';
 import TableView, { EmptyWrapperType } from 'src/components/TableView';
 import { getChartDataRequest } from 'src/chart/chartAction';
-import getClientErrorObject from 'src/utils/getClientErrorObject';
+import { getClientErrorObject } from 'src/utils/getClientErrorObject';
+import {
+  getFromLocalStorage,
+  setInLocalStorage,
+} from 'src/utils/localStorageHelpers';
 import {
   CopyToClipboardButton,
   FilterInput,
@@ -42,6 +46,14 @@ const NULLISH_RESULTS_STATE = {
   [RESULT_TYPES.samples]: undefined,
 };
 
+const DATA_TABLE_PAGE_SIZE = 50;
+
+const STORAGE_KEYS = {
+  isOpen: 'is_datapanel_open',
+};
+
+const DATAPANEL_KEY = 'data';
+
 const TableControlsWrapper = styled.div`
   display: flex;
   align-items: center;
@@ -53,13 +65,9 @@ const TableControlsWrapper = styled.div`
 
 const SouthPane = styled.div`
   position: relative;
-`;
-
-const SouthPaneBackground = styled.div`
-  position: absolute;
-  height: 100%;
-  width: 100%;
-  background: ${({ theme }) => theme.colors.grayscale.light5};
+  background-color: ${({ theme }) => theme.colors.grayscale.light5};
+  z-index: 5;
+  overflow: hidden;
 `;
 
 const TabsWrapper = styled.div<{ contentHeight: number }>`
@@ -72,22 +80,45 @@ const TabsWrapper = styled.div<{ contentHeight: number }>`
   }
 `;
 
+const CollapseWrapper = styled.div`
+  height: 100%;
+
+  .collapse-inner {
+    height: 100%;
+
+    .ant-collapse-item {
+      height: 100%;
+
+      .ant-collapse-content {
+        height: calc(100% - ${({ theme }) => theme.gridUnit * 8}px);
+
+        .ant-collapse-content-box {
+          height: 100%;
+        }
+      }
+    }
+  }
+`;
+
 export const DataTablesPane = ({
   queryFormData,
   tableSectionHeight,
   onCollapseChange,
-  displayBackground,
+  chartStatus,
 }: {
   queryFormData: Record<string, any>;
   tableSectionHeight: number;
   onCollapseChange: (openPanelName: string) => void;
-  displayBackground: boolean;
+  chartStatus: string;
 }) => {
   const [data, setData] = useState<{
     [RESULT_TYPES.results]?: Record<string, any>[];
     [RESULT_TYPES.samples]?: Record<string, any>[];
   }>(NULLISH_RESULTS_STATE);
-  const [isLoading, setIsLoading] = useState(NULLISH_RESULTS_STATE);
+  const [isLoading, setIsLoading] = useState({
+    [RESULT_TYPES.results]: true,
+    [RESULT_TYPES.samples]: true,
+  });
   const [error, setError] = useState(NULLISH_RESULTS_STATE);
   const [filterText, setFilterText] = useState('');
   const [activeTabKey, setActiveTabKey] = useState<string>(
@@ -97,11 +128,16 @@ export const DataTablesPane = ({
     [RESULT_TYPES.results]?: boolean;
     [RESULT_TYPES.samples]?: boolean;
   }>(NULLISH_RESULTS_STATE);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(
+    getFromLocalStorage(STORAGE_KEYS.isOpen, false),
+  );
 
   const getData = useCallback(
     (resultType: string) => {
-      setIsLoading(prevIsLoading => ({ ...prevIsLoading, [resultType]: true }));
+      setIsLoading(prevIsLoading => ({
+        ...prevIsLoading,
+        [resultType]: true,
+      }));
       return getChartDataRequest({
         formData: queryFormData,
         resultFormat: 'json',
@@ -137,19 +173,37 @@ export const DataTablesPane = ({
   );
 
   useEffect(() => {
-    setIsRequestPending({
+    setInLocalStorage(STORAGE_KEYS.isOpen, panelOpen);
+  }, [panelOpen]);
+
+  useEffect(() => {
+    setIsRequestPending(prevState => ({
+      ...prevState,
       [RESULT_TYPES.results]: true,
-      [RESULT_TYPES.samples]: true,
-    });
+    }));
   }, [queryFormData]);
 
   useEffect(() => {
+    setIsRequestPending(prevState => ({
+      ...prevState,
+      [RESULT_TYPES.samples]: true,
+    }));
+  }, [queryFormData.adhoc_filters, queryFormData.datasource]);
+
+  useEffect(() => {
     if (panelOpen && isRequestPending[RESULT_TYPES.results]) {
-      setIsRequestPending(prevState => ({
-        ...prevState,
-        [RESULT_TYPES.results]: false,
-      }));
-      getData(RESULT_TYPES.results);
+      if (chartStatus === 'loading') {
+        setIsLoading(prevIsLoading => ({
+          ...prevIsLoading,
+          [RESULT_TYPES.results]: true,
+        }));
+      } else {
+        setIsRequestPending(prevState => ({
+          ...prevState,
+          [RESULT_TYPES.results]: false,
+        }));
+        getData(RESULT_TYPES.results);
+      }
     }
     if (
       panelOpen &&
@@ -162,7 +216,7 @@ export const DataTablesPane = ({
       }));
       getData(RESULT_TYPES.samples);
     }
-  }, [panelOpen, isRequestPending, getData, activeTabKey]);
+  }, [panelOpen, isRequestPending, getData, activeTabKey, chartStatus]);
 
   const filteredData = {
     [RESULT_TYPES.results]: useFilteredTableData(
@@ -195,10 +249,12 @@ export const DataTablesPane = ({
         <TableView
           columns={columns[type]}
           data={filteredData[type]}
-          withPagination={false}
+          pageSize={DATA_TABLE_PAGE_SIZE}
           noDataText={t('No data')}
           emptyWrapperType={EmptyWrapperType.Small}
           className="table-condensed"
+          isPaginationSticky
+          showRowCount={false}
         />
       );
     }
@@ -207,7 +263,7 @@ export const DataTablesPane = ({
 
   const TableControls = (
     <TableControlsWrapper>
-      <RowCount data={data[activeTabKey]} />
+      <RowCount data={data[activeTabKey]} loading={isLoading[activeTabKey]} />
       <CopyToClipboardButton data={data[activeTabKey]} />
       <FilterInput onChangeHandler={setFilterText} />
     </TableControlsWrapper>
@@ -220,25 +276,40 @@ export const DataTablesPane = ({
 
   return (
     <SouthPane>
-      {displayBackground && <SouthPaneBackground />}
       <TabsWrapper contentHeight={tableSectionHeight}>
-        <Collapse accordion bordered={false} onChange={handleCollapseChange}>
-          <Collapse.Panel header={t('Data')} key="data">
-            <Tabs
-              fullWidth={false}
-              tabBarExtraContent={TableControls}
-              activeKey={activeTabKey}
-              onChange={setActiveTabKey}
-            >
-              <Tabs.TabPane tab={t('View results')} key={RESULT_TYPES.results}>
-                {renderDataTable(RESULT_TYPES.results)}
-              </Tabs.TabPane>
-              <Tabs.TabPane tab={t('View samples')} key={RESULT_TYPES.samples}>
-                {renderDataTable(RESULT_TYPES.samples)}
-              </Tabs.TabPane>
-            </Tabs>
-          </Collapse.Panel>
-        </Collapse>
+        <CollapseWrapper>
+          <Collapse
+            accordion
+            bordered={false}
+            defaultActiveKey={panelOpen ? DATAPANEL_KEY : undefined}
+            onChange={handleCollapseChange}
+            bold
+            ghost
+            className="collapse-inner"
+          >
+            <Collapse.Panel header={t('Data')} key={DATAPANEL_KEY}>
+              <Tabs
+                fullWidth={false}
+                tabBarExtraContent={TableControls}
+                activeKey={activeTabKey}
+                onChange={setActiveTabKey}
+              >
+                <Tabs.TabPane
+                  tab={t('View results')}
+                  key={RESULT_TYPES.results}
+                >
+                  {renderDataTable(RESULT_TYPES.results)}
+                </Tabs.TabPane>
+                <Tabs.TabPane
+                  tab={t('View samples')}
+                  key={RESULT_TYPES.samples}
+                >
+                  {renderDataTable(RESULT_TYPES.samples)}
+                </Tabs.TabPane>
+              </Tabs>
+            </Collapse.Panel>
+          </Collapse>
+        </CollapseWrapper>
       </TabsWrapper>
     </SouthPane>
   );

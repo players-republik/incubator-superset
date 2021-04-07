@@ -21,11 +21,19 @@
 
 replicaCount: 1
 
-## These requirements are used to build a requirements file which is then applied on init
-## of superset containers
-additionalRequirements:
-  - "psycopg2==2.8.5"
-  - "redis==3.2.1"
+# User ID directive. This user must have enough permissions to run the bootstrap script
+# Runn containers as root is not recommended in production. Change this to another UID - e.g. 1000 to be more secure
+runAsUser: 0
+
+# Install additional packages and do any other bootstrap configuration in this script
+# For production clusters it's recommended to build own image with this step done in CI
+bootstrapScript: |
+  #!/bin/bash
+  apt-get update -y &&\
+   apt-get install -y --no-install-recommends nano &&\
+   rm -rf /var/lib/apt/lists/*
+  pip install psycopg2==2.8.5 redis==3.2.1
+  if [ ! -f ~/bootstrap ]; then echo "Running Superset with uid {{ .Values.runAsUser }}" > ~/bootstrap; fi
 
 ## The name of the secret which we will use to generate a superset_config.py file
 ## Note: this secret must have the key superset_config.py in it and can include other files as well
@@ -41,16 +49,69 @@ envFromSecret: '{{ template "superset.fullname" . }}-env'
 ##
 extraEnv: {}
 
+## Extra environment variables to pass as secrets
+##
+extraSecretEnv: {}
+  # MAPBOX_API_KEY: ...
+  # GOOGLE_KEY: ...
+  # GOOGLE_SECRET: ...
+
+extraConfigs: {}
+  # datasources-init.yaml: |
+  #     databases:
+  #     - allow_csv_upload: true
+  #       allow_ctas: true
+  #       allow_cvas: true
+  #       database_name: example-db
+  #       extra: "{\r\n    \"metadata_params\": {},\r\n    \"engine_params\": {},\r\n    \"\
+  #         metadata_cache_timeout\": {},\r\n    \"schemas_allowed_for_csv_upload\": []\r\n\
+  #         }"
+  #       sqlalchemy_uri: example://example-db.local
+  #       tables: []
+
+
+extraSecrets: {}
+
+
+# A dictionary of overrides to append at the end of superset_config.py - the name does not matter
+# WARNING: the order is not guaranteed
+configOverrides: {}
+  # enable_oauth: |
+  #   from flask_appbuilder.security.manager import AUTH_DB
+  #   AUTH_TYPE = AUTH_OAUTH
+
+  #   OAUTH_PROVIDERS = [
+  #       {
+  #           "name": "google",
+  #           "icon": "fa-google",
+  #           "token_key": "access_token",
+  #           "remote_app": {
+  #               "client_id": os.environ.get("GOOGLE_KEY"),
+  #               "client_secret": os.environ.get("GOOGLE_SECRET"),
+  #               "api_base_url": "https://www.googleapis.com/oauth2/v2/",
+  #               "client_kwargs": {"scope": "email profile"},
+  #               "request_token_url": None,
+  #               "access_token_url": "https://accounts.google.com/o/oauth2/token",
+  #               "authorize_url": "https://accounts.google.com/o/oauth2/auth",
+  #           },
+  #       }
+  #   ]
+
 configMountPath: "/app/pythonpath"
 
+extraConfigMountPath: "/app/configs"
+
 image:
-  repository: apache/incubator-superset
+  repository: apache/superset
   tag: latest
   pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
   port: 8088
+  annotations: {}
+    # cloud.google.com/load-balancer-type: "Internal"
+  loadBalancerIP: null
 
 ingress:
   enabled: false
@@ -120,14 +181,49 @@ supersetWorker:
       command: [ "/bin/sh", "-c", "until nc -zv $DB_HOST $DB_PORT -w1; do echo 'waiting for db'; sleep 1; done" ]
 
 ##
+## Superset beat configuration (to trigger scheduled jobs like reports)
+supersetCeleryBeat:
+  # This is only required if you intend to use alerts and reports
+  enabled: false
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; celery beat --app=superset.tasks.celery_app:app --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule"
+  forceReload: false # If true, forces deployment to reload on each upgrade
+  initContainers:
+    - name: wait-for-postgres
+      image: busybox:latest
+      imagePullPolicy: IfNotPresent
+      envFrom:
+        - secretRef:
+            name: '{{ tpl .Values.envFromSecret . }}'
+      command: [ "/bin/sh", "-c", "until nc -zv $DB_HOST $DB_PORT -w1; do echo 'waiting for db'; sleep 1; done" ]
+
+##
 ## Init job configuration
 init:
+  # Configure resources
+  # Warning: fab commant consumes a lot of ram and can
+  # cause the process to be killed due to OOM if it exceeds limit
+  resources: {}
+    # limits:
+    #   cpu:
+    #   memory:
+    # requests:
+    #   cpu:
+    #   memory:
   command:
     - "/bin/sh"
     - "-c"
     - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; . {{ .Values.configMountPath }}/superset_init.sh"
   enabled: true
   loadExamples: false
+  adminUser:
+    username: admin
+    firstname: Superset
+    lastname: Admin
+    email: admin@superset.com
+    password: admin
   initContainers:
     - name: wait-for-postgres
       image: busybox:latest
@@ -144,11 +240,12 @@ init:
     superset init
     echo "Creating admin user..."
     superset fab create-admin \
-                    --username admin \
-                      --firstname Superset \
-                      --lastname Admin \
-                      --email admin@superset.com \
-                      --password admin || true
+                    --username {{ .Values.init.adminUser.username }} \
+                    --firstname {{ .Values.init.adminUser.firstname }} \
+                    --lastname {{ .Values.init.adminUser.lastname }} \
+                    --email {{ .Values.init.adminUser.email }} \
+                    --password {{ .Values.init.adminUser.password }} \
+                    || true
     {{ if .Values.init.loadExamples }}
     echo "Loading examples..."
     superset load_examples

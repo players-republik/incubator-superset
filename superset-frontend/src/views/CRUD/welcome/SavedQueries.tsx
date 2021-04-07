@@ -22,6 +22,7 @@ import SyntaxHighlighter from 'react-syntax-highlighter/dist/cjs/light';
 import sql from 'react-syntax-highlighter/dist/cjs/languages/hljs/sql';
 import github from 'react-syntax-highlighter/dist/cjs/styles/hljs/github';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
+import Loading from 'src/components/Loading';
 import { Dropdown, Menu } from 'src/common/components';
 import { useListViewResource, copyQueryLink } from 'src/views/CRUD/hooks';
 import ListViewCard from 'src/components/ListViewCard';
@@ -29,12 +30,7 @@ import DeleteModal from 'src/components/DeleteModal';
 import Icon from 'src/components/Icon';
 import SubMenu from 'src/components/Menu/SubMenu';
 import EmptyState from './EmptyState';
-import {
-  IconContainer,
-  CardContainer,
-  createErrorHandler,
-  shortenSQL,
-} from '../utils';
+import { CardContainer, createErrorHandler, shortenSQL } from '../utils';
 
 SyntaxHighlighter.registerLanguage('sql', sql);
 
@@ -62,6 +58,8 @@ interface SavedQueriesProps {
   addDangerToast: (arg0: string) => void;
   addSuccessToast: (arg0: string) => void;
   mine: Array<Query>;
+  showThumbnails: boolean;
+  featureFlag: boolean;
 }
 
 export const CardStyles = styled.div`
@@ -114,9 +112,11 @@ const SavedQueries = ({
   addDangerToast,
   addSuccessToast,
   mine,
+  showThumbnails,
+  featureFlag,
 }: SavedQueriesProps) => {
   const {
-    state: { resourceCollection: queries },
+    state: { loading, resourceCollection: queries },
     hasPerm,
     fetchData,
     refreshData,
@@ -126,6 +126,8 @@ const SavedQueries = ({
     addDangerToast,
     true,
     mine,
+    [],
+    false,
   );
   const [queryFilter, setQueryFilter] = useState('Mine');
   const [queryDeleteModal, setQueryDeleteModal] = useState(false);
@@ -187,8 +189,8 @@ const SavedQueries = ({
     return filters;
   };
 
-  const getData = (filter: string) => {
-    return fetchData({
+  const getData = (filter: string) =>
+    fetchData({
       pageIndex: 0,
       pageSize: PAGE_SIZE,
       sortBy: [
@@ -199,7 +201,6 @@ const SavedQueries = ({
       ],
       filters: getFilters(filter),
     });
-  };
 
   const renderMenu = (query: Query) => (
     <Menu>
@@ -233,6 +234,8 @@ const SavedQueries = ({
       )}
     </Menu>
   );
+
+  if (loading) return <Loading position="inline" />;
   return (
     <>
       {queryDeleteModal && (
@@ -255,6 +258,7 @@ const SavedQueries = ({
       <SubMenu
         activeChild={queryFilter}
         tabs={[
+          /* @TODO uncomment when fav functionality is implemented
           {
             name: 'Favorite',
             label: t('Favorite'),
@@ -262,6 +266,7 @@ const SavedQueries = ({
               getData('Favorite').then(() => setQueryFilter('Favorite'));
             },
           },
+          */
           {
             name: 'Mine',
             label: t('Mine'),
@@ -271,9 +276,10 @@ const SavedQueries = ({
         buttons={[
           {
             name: (
-              <IconContainer>
-                <Icon name="plus-small" /> SQL Query{' '}
-              </IconContainer>
+              <>
+                <i className="fa fa-plus" />
+                SQL Query
+              </>
             ),
             buttonStyle: 'tertiary',
             onClick: () => {
@@ -305,7 +311,7 @@ const SavedQueries = ({
                 imgFallbackURL="/static/assets/images/empty-query.svg"
                 description={t('Last run %s', q.changed_on_delta_humanized)}
                 cover={
-                  q?.sql?.length ? (
+                  q?.sql?.length && showThumbnails && featureFlag ? (
                     <QueryContainer>
                       <SyntaxHighlighter
                         language="sql"
@@ -326,8 +332,10 @@ const SavedQueries = ({
                         {shortenSQL(q.sql, 25)}
                       </SyntaxHighlighter>
                     </QueryContainer>
-                  ) : (
+                  ) : showThumbnails && !q?.sql?.length ? (
                     false
+                  ) : (
+                    <></>
                   )
                 }
                 actions={

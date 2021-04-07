@@ -30,6 +30,7 @@ from superset.extensions import (
     _event_logger,
     APP_DIR,
     appbuilder,
+    async_query_manager,
     cache_manager,
     celery_app,
     csrf,
@@ -71,7 +72,7 @@ def create_app() -> Flask:
 class SupersetIndexView(IndexView):
     @expose("/")
     def index(self) -> FlaskResponse:
-        return redirect("/superset/welcome")
+        return redirect("/superset/welcome/")
 
 
 class SupersetAppInitializer:
@@ -127,6 +128,7 @@ class SupersetAppInitializer:
         # pylint: disable=too-many-branches
         from superset.annotation_layers.api import AnnotationLayerRestApi
         from superset.annotation_layers.annotations.api import AnnotationRestApi
+        from superset.async_events.api import AsyncEventsRestApi
         from superset.cachekeys.api import CacheRestApi
         from superset.charts.api import ChartRestApi
         from superset.connectors.druid.views import (
@@ -146,7 +148,10 @@ class SupersetAppInitializer:
         from superset.dashboards.api import DashboardRestApi
         from superset.databases.api import DatabaseRestApi
         from superset.datasets.api import DatasetRestApi
+        from superset.datasets.columns.api import DatasetColumnsRestApi
+        from superset.datasets.metrics.api import DatasetMetricRestApi
         from superset.queries.api import QueryRestApi
+        from superset.security.api import SecurityRestApi
         from superset.queries.saved_queries.api import SavedQueryRestApi
         from superset.reports.api import ReportScheduleRestApi
         from superset.reports.logs.api import ReportExecutionLogRestApi
@@ -155,7 +160,8 @@ class SupersetAppInitializer:
             AlertLogModelView,
             AlertModelView,
             AlertObservationModelView,
-            AlertReportModelView,
+            AlertView,
+            ReportView,
         )
         from superset.views.annotations import (
             AnnotationLayerModelView,
@@ -179,6 +185,7 @@ class SupersetAppInitializer:
             ExcelToDatabaseView,
         )
         from superset.views.datasource import Datasource
+        from superset.views.dynamic_plugins import DynamicPluginsView
         from superset.views.key_value import KV
         from superset.views.log.api import LogRestApi
         from superset.views.log.views import LogModelView
@@ -201,12 +208,15 @@ class SupersetAppInitializer:
         #
         appbuilder.add_api(AnnotationRestApi)
         appbuilder.add_api(AnnotationLayerRestApi)
+        appbuilder.add_api(AsyncEventsRestApi)
         appbuilder.add_api(CacheRestApi)
         appbuilder.add_api(ChartRestApi)
         appbuilder.add_api(CssTemplateRestApi)
         appbuilder.add_api(DashboardRestApi)
         appbuilder.add_api(DatabaseRestApi)
         appbuilder.add_api(DatasetRestApi)
+        appbuilder.add_api(DatasetColumnsRestApi)
+        appbuilder.add_api(DatasetMetricRestApi)
         appbuilder.add_api(QueryRestApi)
         appbuilder.add_api(SavedQueryRestApi)
         if feature_flag_manager.is_feature_enabled("ALERT_REPORTS"):
@@ -217,7 +227,7 @@ class SupersetAppInitializer:
         #
         if appbuilder.app.config["LOGO_TARGET_PATH"]:
             appbuilder.add_link(
-                "Home", label=__("Home"), href="/superset/welcome",
+                "Home", label=__("Home"), href="/superset/welcome/",
             )
         appbuilder.add_view(
             AnnotationLayerModelView,
@@ -240,7 +250,7 @@ class SupersetAppInitializer:
         appbuilder.add_link(
             "Datasets",
             label=__("Datasets"),
-            href="/tablemodelview/list/?_flt_1_is_sqllab_view=y",
+            href="/tablemodelview/list/",
             icon="fa-table",
             category="Data",
             category_label=__("Data"),
@@ -263,6 +273,15 @@ class SupersetAppInitializer:
             category="",
             category_icon="",
         )
+        if feature_flag_manager.is_feature_enabled("DYNAMIC_PLUGINS"):
+            appbuilder.add_view(
+                DynamicPluginsView,
+                "Plugins",
+                label=__("Plugins"),
+                category="Manage",
+                category_label=__("Manage"),
+                icon="fa-puzzle-piece",
+            )
         appbuilder.add_view(
             CssTemplateModelView,
             "CSS Templates",
@@ -315,19 +334,20 @@ class SupersetAppInitializer:
         #
         # Add links
         #
-        appbuilder.add_link(
-            "Import Dashboards",
-            label=__("Import Dashboards"),
-            href="/superset/import_dashboards",
-            icon="fa-cloud-upload",
-            category="Manage",
-            category_label=__("Manage"),
-            category_icon="fa-wrench",
-        )
+        if not feature_flag_manager.is_feature_enabled("VERSIONED_EXPORT"):
+            appbuilder.add_link(
+                "Import Dashboards",
+                label=__("Import Dashboards"),
+                href="/superset/import_dashboards/",
+                icon="fa-cloud-upload",
+                category="Manage",
+                category_label=__("Manage"),
+                category_icon="fa-wrench",
+            )
         appbuilder.add_link(
             "SQL Editor",
             label=_("SQL Editor"),
-            href="/superset/sqllab",
+            href="/superset/sqllab/",
             category_icon="fa-flask",
             icon="fa-flask",
             category="SQL Lab",
@@ -335,14 +355,14 @@ class SupersetAppInitializer:
         )
         appbuilder.add_link(
             __("Saved Queries"),
-            href="/sqllab/my_queries/",
+            href="/savedqueryview/list/",
             icon="fa-save",
             category="SQL Lab",
         )
         appbuilder.add_link(
             "Query Search",
             label=_("Query History"),
-            href="/superset/sqllab/history",
+            href="/superset/sqllab/history/",
             icon="fa-search",
             category_icon="fa-flask",
             category="SQL Lab",
@@ -391,11 +411,15 @@ class SupersetAppInitializer:
                 category_label=__("Security"),
                 icon="fa-list-ol",
             )
-
+        appbuilder.add_api(SecurityRestApi)
         #
         # Conditionally setup email views
         #
         if self.config["ENABLE_SCHEDULED_EMAIL_REPORTS"]:
+            logging.warning(
+                "ENABLE_SCHEDULED_EMAIL_REPORTS "
+                "is deprecated and will be removed in version 2.0.0"
+            )
             appbuilder.add_separator("Manage")
             appbuilder.add_view(
                 DashboardEmailScheduleView,
@@ -415,6 +439,9 @@ class SupersetAppInitializer:
             )
 
         if self.config["ENABLE_ALERTS"]:
+            logging.warning(
+                "ENABLE_ALERTS is deprecated and will be removed in version 2.0.0"
+            )
             appbuilder.add_view(
                 AlertModelView,
                 "Alerts",
@@ -425,8 +452,17 @@ class SupersetAppInitializer:
             )
             appbuilder.add_view_no_menu(AlertLogModelView)
             appbuilder.add_view_no_menu(AlertObservationModelView)
-            if feature_flag_manager.is_feature_enabled("SIP_34_ALERTS_UI"):
-                appbuilder.add_view_no_menu(AlertReportModelView)
+
+        if feature_flag_manager.is_feature_enabled("ALERT_REPORTS"):
+            appbuilder.add_view(
+                AlertView,
+                "Alerts & Report",
+                label=__("Alerts & Reports"),
+                category="Manage",
+                category_label=__("Manage"),
+                icon="fa-exclamation-triangle",
+            )
+            appbuilder.add_view_no_menu(ReportView)
 
         #
         # Conditionally add Access Request Model View
@@ -497,6 +533,7 @@ class SupersetAppInitializer:
         self.configure_url_map_converters()
         self.configure_data_sources()
         self.configure_auth_provider()
+        self.configure_async_queries()
 
         # Hook that provides administrators a handle on the Flask APP
         # after initialization
@@ -646,6 +683,10 @@ class SupersetAppInitializer:
             csrf_exempt_list = self.config["WTF_CSRF_EXEMPT_LIST"]
             for ex in csrf_exempt_list:
                 csrf.exempt(ex)
+
+    def configure_async_queries(self) -> None:
+        if feature_flag_manager.is_feature_enabled("GLOBAL_ASYNC_QUERIES"):
+            async_query_manager.init_app(self.flask_app)
 
     def register_blueprints(self) -> None:
         for bp in self.config["BLUEPRINTS"]:

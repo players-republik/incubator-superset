@@ -23,7 +23,7 @@ from sqlalchemy.engine import Engine
 from tests.test_app import app
 
 from superset import db
-from superset.utils.core import get_example_database
+from superset.utils.core import get_example_database, json_dumps_w_dates
 
 
 CTAS_SCHEMA_NAME = "sqllab_test_db"
@@ -42,17 +42,11 @@ def setup_sample_data() -> Any:
         from superset import examples
 
         examples.load_css_templates()
-        examples.load_energy(sample=True)
-        examples.load_world_bank_health_n_pop(sample=True)
-        examples.load_birth_names(sample=True)
 
     yield
 
     with app.app_context():
         engine = get_example_database().get_sqla_engine()
-        engine.execute("DROP TABLE energy_usage")
-        engine.execute("DROP TABLE wb_health_population")
-        engine.execute("DROP TABLE birth_names")
 
         # drop sqlachemy tables
 
@@ -79,13 +73,22 @@ def drop_from_schema(engine: Engine, schema_name: str):
 
 def setup_presto_if_needed():
     backend = app.config["SQLALCHEMY_EXAMPLES_URI"].split("://")[0]
+    database = get_example_database()
+    extra = database.get_extra()
+
     if backend == "presto":
         # decrease poll interval for tests
-        presto_poll_interval = app.config["PRESTO_POLL_INTERVAL"]
-        extra = f'{{"engine_params": {{"connect_args": {{"poll_interval": {presto_poll_interval}}}}}}}'
-        database = get_example_database()
-        database.extra = extra
-        db.session.commit()
+        extra = {
+            **extra,
+            "engine_params": {
+                "connect_args": {"poll_interval": app.config["PRESTO_POLL_INTERVAL"]}
+            },
+        }
+    else:
+        # remove `poll_interval` from databases that do not support it
+        extra = {**extra, "engine_params": {}}
+    database.extra = json_dumps_w_dates(extra)
+    db.session.commit()
 
     if backend in {"presto", "hive"}:
         database = get_example_database()

@@ -32,6 +32,7 @@ from typing import (
     Optional,
     Pattern,
     Tuple,
+    Type,
     TYPE_CHECKING,
     Union,
 )
@@ -39,8 +40,8 @@ from typing import (
 import pandas as pd
 import sqlparse
 from flask import g
-from flask_babel import lazy_gettext as _
-from sqlalchemy import column, DateTime, select
+from flask_babel import gettext as __, lazy_gettext as _
+from sqlalchemy import column, DateTime, select, types
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.engine.interfaces import Compiled, Dialect
 from sqlalchemy.engine.reflection import Inspector
@@ -48,14 +49,16 @@ from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import quoted_name, text
-from sqlalchemy.sql.expression import ColumnClause, ColumnElement, Select, TextAsFrom
-from sqlalchemy.types import TypeEngine
+from sqlalchemy.sql.expression import ColumnClause, Select, TextAsFrom
+from sqlalchemy.types import String, TypeEngine, UnicodeText
 
-from superset import app, sql_parse
+from superset import app, security_manager, sql_parse
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.models.sql_lab import Query
+from superset.models.sql_types.base import literal_dttm_type_factory
 from superset.sql_parse import ParsedQuery, Table
 from superset.utils import core as utils
+from superset.utils.core import ColumnSpec, GenericDataType
 
 if TYPE_CHECKING:
     # prevent circular imports
@@ -76,23 +79,23 @@ QueryStatus = utils.QueryStatus
 config = app.config
 
 builtin_time_grains: Dict[Optional[str], str] = {
-    None: "Time Column",
-    "PT1S": "second",
-    "PT1M": "minute",
-    "PT5M": "5 minute",
-    "PT10M": "10 minute",
-    "PT15M": "15 minute",
-    "PT0.5H": "half hour",
-    "PT1H": "hour",
-    "P1D": "day",
-    "P1W": "week",
-    "P1M": "month",
-    "P0.25Y": "quarter",
-    "P1Y": "year",
-    "1969-12-28T00:00:00Z/P1W": "week_start_sunday",
-    "1969-12-29T00:00:00Z/P1W": "week_start_monday",
-    "P1W/1970-01-03T00:00:00Z": "week_ending_saturday",
-    "P1W/1970-01-04T00:00:00Z": "week_ending_sunday",
+    None: __("Original value"),
+    "PT1S": __("Second"),
+    "PT1M": __("Minute"),
+    "PT5M": __("5 minute"),
+    "PT10M": __("10 minute"),
+    "PT15M": __("15 minute"),
+    "PT0.5H": __("Half hour"),
+    "PT1H": __("Hour"),
+    "P1D": __("Day"),
+    "P1W": __("Week"),
+    "P1M": __("Month"),
+    "P0.25Y": __("Quarter"),
+    "P1Y": __("Year"),
+    "1969-12-28T00:00:00Z/P1W": __("Week starting sunday"),
+    "1969-12-29T00:00:00Z/P1W": __("Week starting monday"),
+    "P1W/1970-01-03T00:00:00Z": __("Week ending saturday"),
+    "P1W/1970-01-04T00:00:00Z": __("Week_ending sunday"),
 }
 
 
@@ -134,7 +137,18 @@ class LimitMethod:  # pylint: disable=too-few-public-methods
 
 
 class BaseEngineSpec:  # pylint: disable=too-many-public-methods
-    """Abstract class for database engine specific configurations"""
+    """Abstract class for database engine specific configurations
+
+    Attributes:
+        allows_alias_to_source_column: Whether the engine is able to pick the
+                                       source column for aggregation clauses
+                                       used in ORDER BY when a column in SELECT
+                                       has an alias that is the same as a source
+                                       column.
+        allows_hidden_orderby_agg:     Whether the engine allows ORDER BY to
+                                       directly use aggregation clauses, without
+                                       having to add the same aggregation in SELECT.
+    """
 
     engine = "base"  # str as defined in sqlalchemy.engine.engine
     engine_aliases: Optional[Tuple[str]] = None
@@ -144,66 +158,146 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
     _date_trunc_functions: Dict[str, str] = {}
     _time_grain_expressions: Dict[Optional[str], str] = {}
     column_type_mappings: Tuple[
-        Tuple[Pattern[str], Union[TypeEngine, Callable[[Match[str]], TypeEngine]]], ...,
-    ] = ()
+        Tuple[
+            Pattern[str],
+            Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
+            GenericDataType,
+        ],
+        ...,
+    ] = (
+        (
+            re.compile(r"^smallint", re.IGNORECASE),
+            types.SmallInteger(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^int.*", re.IGNORECASE),
+            types.Integer(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^bigint", re.IGNORECASE),
+            types.BigInteger(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^decimal", re.IGNORECASE),
+            types.Numeric(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^numeric", re.IGNORECASE),
+            types.Numeric(),
+            GenericDataType.NUMERIC,
+        ),
+        (re.compile(r"^real", re.IGNORECASE), types.REAL, GenericDataType.NUMERIC,),
+        (
+            re.compile(r"^smallserial", re.IGNORECASE),
+            types.SmallInteger(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^serial", re.IGNORECASE),
+            types.Integer(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^bigserial", re.IGNORECASE),
+            types.BigInteger(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^string", re.IGNORECASE),
+            types.String(),
+            utils.GenericDataType.STRING,
+        ),
+        (
+            re.compile(r"^N((VAR)?CHAR|TEXT)", re.IGNORECASE),
+            UnicodeText(),
+            utils.GenericDataType.STRING,
+        ),
+        (
+            re.compile(r"^((VAR)?CHAR|TEXT|STRING)", re.IGNORECASE),
+            String(),
+            utils.GenericDataType.STRING,
+        ),
+        (
+            re.compile(r"^datetime", re.IGNORECASE),
+            types.DateTime(),
+            GenericDataType.TEMPORAL,
+        ),
+        (re.compile(r"^date", re.IGNORECASE), types.Date(), GenericDataType.TEMPORAL,),
+        (
+            re.compile(r"^timestamp", re.IGNORECASE),
+            types.TIMESTAMP(),
+            GenericDataType.TEMPORAL,
+        ),
+        (
+            re.compile(r"^interval", re.IGNORECASE),
+            types.Interval(),
+            GenericDataType.TEMPORAL,
+        ),
+        (re.compile(r"^time", re.IGNORECASE), types.Time(), GenericDataType.TEMPORAL,),
+        (
+            re.compile(r"^bool.*", re.IGNORECASE),
+            types.Boolean(),
+            GenericDataType.BOOLEAN,
+        ),
+    )
     time_groupby_inline = False
     limit_method = LimitMethod.FORCE_LIMIT
     time_secondary_columns = False
     allows_joins = True
     allows_subqueries = True
-    allows_column_aliases = True
+    allows_alias_in_select = True
+    allows_alias_in_orderby = True
+    allows_sql_comments = True
+
+    # Whether ORDER BY clause can use aliases created in SELECT
+    # that are the same as a source column
+    allows_alias_to_source_column = True
+
+    # Whether ORDER BY clause must appear in SELECT
+    # if TRUE, then it doesn't have to.
+    allows_hidden_ordeby_agg = True
+
     force_column_alias_quotes = False
     arraysize = 0
     max_column_name_length = 0
     try_remove_schema_from_table_name = True  # pylint: disable=invalid-name
     run_multiple_statements_as_one = False
 
-    # default matching patterns for identifying column types
-    db_column_types: Dict[utils.DbColumnType, Tuple[Pattern[Any], ...]] = {
-        utils.DbColumnType.NUMERIC: (
-            re.compile(r"BIT", re.IGNORECASE),
-            re.compile(r".*DOUBLE.*", re.IGNORECASE),
-            re.compile(r".*FLOAT.*", re.IGNORECASE),
-            re.compile(r".*INT.*", re.IGNORECASE),
-            re.compile(r".*NUMBER.*", re.IGNORECASE),
-            re.compile(r".*LONG$", re.IGNORECASE),
-            re.compile(r".*REAL.*", re.IGNORECASE),
-            re.compile(r".*NUMERIC.*", re.IGNORECASE),
-            re.compile(r".*DECIMAL.*", re.IGNORECASE),
-            re.compile(r".*MONEY.*", re.IGNORECASE),
-        ),
-        utils.DbColumnType.STRING: (
-            re.compile(r".*CHAR.*", re.IGNORECASE),
-            re.compile(r".*STRING.*", re.IGNORECASE),
-            re.compile(r".*TEXT.*", re.IGNORECASE),
-        ),
-        utils.DbColumnType.TEMPORAL: (
-            re.compile(r".*DATE.*", re.IGNORECASE),
-            re.compile(r".*TIME.*", re.IGNORECASE),
-        ),
-    }
+    @classmethod
+    def get_dbapi_exception_mapping(cls) -> Dict[Type[Exception], Type[Exception]]:
+        """
+        Each engine can implement and converge its own specific exceptions into
+        Superset DBAPI exceptions
+
+        Note: On python 3.9 this method can be changed to a classmethod property
+        without the need of implementing a metaclass type
+
+        :return: A map of driver specific exception to superset custom exceptions
+        """
+        return {}
 
     @classmethod
-    def is_db_column_type_match(
-        cls, db_column_type: Optional[str], target_column_type: utils.DbColumnType
-    ) -> bool:
+    def get_dbapi_mapped_exception(cls, exception: Exception) -> Exception:
         """
-        Check if a column type satisfies a pattern in a collection of regexes found in
-        `db_column_types`. For example, if `db_column_type == "NVARCHAR"`,
-        it would be a match for "STRING" due to being a match for the regex ".*CHAR.*".
+        Get a superset custom DBAPI exception from the driver specific exception.
 
-        :param db_column_type: Column type to evaluate
-        :param target_column_type: The target type to evaluate for
-        :return: `True` if a `db_column_type` matches any pattern corresponding to
-        `target_column_type`
+        Override if the engine needs to perform extra changes to the exception, for
+        example change the exception message or implement custom more complex logic
+
+        :param exception: The driver specific exception
+        :return: Superset custom DBAPI exception
         """
-        if not db_column_type:
-            return False
-        patterns = cls.db_column_types[target_column_type]
-        return any(pattern.match(db_column_type) for pattern in patterns)
+        new_exception = cls.get_dbapi_exception_mapping().get(type(exception))
+        if not new_exception:
+            return exception
+        return new_exception(str(exception))
 
     @classmethod
-    def get_allow_cost_estimate(cls, version: Optional[str] = None) -> bool:
+    def get_allow_cost_estimate(cls, extra: Dict[str, Any]) -> bool:
         return False
 
     @classmethod
@@ -245,6 +339,10 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
                 date_trunc_function = cls._date_trunc_functions.get(type_)
                 if date_trunc_function:
                     time_expr = time_expr.replace("{func}", date_trunc_function)
+            if type_ and "{type}" in time_expr:
+                date_trunc_function = cls._date_trunc_functions.get(type_)
+                if date_trunc_function:
+                    time_expr = time_expr.replace("{type}", type_)
         else:
             time_expr = "{col}"
 
@@ -274,6 +372,68 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         return tuple(ret_list)
 
     @classmethod
+    def _sort_time_grains(
+        cls, val: Tuple[Optional[str], str], index: int
+    ) -> Union[float, int, str]:
+        """
+        Return an ordered time-based value of a portion of a time grain
+        for sorting
+        Values are expected to be either None or start with P or PT
+        Have a numerical value in the middle and end with
+        a value for the time interval
+        It can also start or end with epoch start time denoting a range
+        i.e, week beginning or ending with a day
+        """
+        pos = {
+            "FIRST": 0,
+            "SECOND": 1,
+            "THIRD": 2,
+            "LAST": 3,
+        }
+
+        if val[0] is None:
+            return pos["FIRST"]
+
+        prog = re.compile(r"(.*\/)?(P|PT)([0-9\.]+)(S|M|H|D|W|M|Y)(\/.*)?")
+        result = prog.match(val[0])
+
+        # for any time grains that don't match the format, put them at the end
+        if result is None:
+            return pos["LAST"]
+
+        second_minute_hour = ["S", "M", "H"]
+        day_week_month_year = ["D", "W", "M", "Y"]
+        is_less_than_day = result.group(2) == "PT"
+        interval = result.group(4)
+        epoch_time_start_string = result.group(1) or result.group(5)
+        has_starting_or_ending = bool(len(epoch_time_start_string or ""))
+
+        def sort_day_week() -> int:
+            if has_starting_or_ending:
+                return pos["LAST"]
+            if is_less_than_day:
+                return pos["SECOND"]
+            return pos["THIRD"]
+
+        def sort_interval() -> float:
+            if is_less_than_day:
+                return second_minute_hour.index(interval)
+            return day_week_month_year.index(interval)
+
+        # 0: all "PT" values should come before "P" values (i.e, PT10M)
+        # 1: order values within the above arrays ("D" before "W")
+        # 2: sort by numeric value (PT10M before PT15M)
+        # 3: sort by any week starting/ending values
+        plist = {
+            0: sort_day_week(),
+            1: pos["SECOND"] if is_less_than_day else pos["THIRD"],
+            2: sort_interval(),
+            3: float(result.group(3)),
+        }
+
+        return plist.get(index, 0)
+
+    @classmethod
     def get_time_grain_expressions(cls) -> Dict[Optional[str], str]:
         """
         Return a dict of all supported time grains including any potential added grains
@@ -288,21 +448,18 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         denylist: List[str] = config["TIME_GRAIN_DENYLIST"]
         for key in denylist:
             time_grain_expressions.pop(key)
-        return time_grain_expressions
 
-    @classmethod
-    def make_select_compatible(
-        cls, groupby_exprs: Dict[str, ColumnElement], select_exprs: List[ColumnElement]
-    ) -> List[ColumnElement]:
-        """
-        Some databases will just return the group-by field into the select, but don't
-        allow the group-by field to be put into the select list.
-
-        :param groupby_exprs: mapping between column name and column object
-        :param select_exprs: all columns in the select clause
-        :return: columns to be included in the final select clause
-        """
-        return select_exprs
+        return dict(
+            sorted(
+                time_grain_expressions.items(),
+                key=lambda x: (
+                    cls._sort_time_grains(x, 0),
+                    cls._sort_time_grains(x, 1),
+                    cls._sort_time_grains(x, 2),
+                    cls._sort_time_grains(x, 3),
+                ),
+            )
+        )
 
     @classmethod
     def fetch_data(
@@ -316,9 +473,12 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         """
         if cls.arraysize:
             cursor.arraysize = cls.arraysize
-        if cls.limit_method == LimitMethod.FETCH_MANY and limit:
-            return cursor.fetchmany(limit)
-        return cursor.fetchall()
+        try:
+            if cls.limit_method == LimitMethod.FETCH_MANY and limit:
+                return cursor.fetchmany(limit)
+            return cursor.fetchall()
+        except Exception as ex:
+            raise cls.get_dbapi_mapped_exception(ex)
 
     @classmethod
     def expand_data(
@@ -424,7 +584,7 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
             )
             return database.compile_sqla_query(qry)
 
-        if LimitMethod.FORCE_LIMIT:
+        if cls.limit_method == LimitMethod.FORCE_LIMIT:
             parsed_query = sql_parse.ParsedQuery(sql)
             sql = parsed_query.set_or_update_query_limit(limit)
 
@@ -790,16 +950,12 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         return sql
 
     @classmethod
-    def estimate_statement_cost(
-        cls, statement: str, database: "Database", cursor: Any, user_name: str
-    ) -> Dict[str, Any]:
+    def estimate_statement_cost(cls, statement: str, cursor: Any,) -> Dict[str, Any]:
         """
         Generate a SQL query that estimates the cost of a given statement.
 
         :param statement: A single SQL statement
-        :param database: Database instance
         :param cursor: Cursor instance
-        :param username: Effective username
         :return: Dictionary with different costs
         """
         raise Exception("Database does not support cost estimation")
@@ -817,9 +973,29 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         raise Exception("Database does not support cost estimation")
 
     @classmethod
+    def process_statement(
+        cls, statement: str, database: "Database", user_name: str
+    ) -> str:
+        """
+        Process a SQL statement by stripping and mutating it.
+
+        :param statement: A single SQL statement
+        :param database: Database instance
+        :param username: Effective username
+        :return: Dictionary with different costs
+        """
+        parsed_query = ParsedQuery(statement)
+        sql = parsed_query.stripped()
+        sql_query_mutator = config["SQL_QUERY_MUTATOR"]
+        if sql_query_mutator:
+            sql = sql_query_mutator(sql, user_name, security_manager, database)
+
+        return sql
+
+    @classmethod
     def estimate_query_cost(
         cls, database: "Database", schema: str, sql: str, source: Optional[str] = None
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """
         Estimate the cost of a multiple statement SQL query.
 
@@ -828,8 +1004,8 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         :param sql: SQL query with possibly multiple statements
         :param source: Source of the query (eg, "sql_lab")
         """
-        database_version = database.get_extra().get("version")
-        if not cls.get_allow_cost_estimate(database_version):
+        extra = database.get_extra() or {}
+        if not cls.get_allow_cost_estimate(extra):
             raise Exception("Database does not support cost estimation")
 
         user_name = g.user.username if g.user else None
@@ -839,13 +1015,12 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         engine = cls.get_engine(database, schema=schema, source=source)
         costs = []
         with closing(engine.raw_connection()) as conn:
-            with closing(conn.cursor()) as cursor:
-                for statement in statements:
-                    costs.append(
-                        cls.estimate_statement_cost(
-                            statement, database, cursor, user_name
-                        )
-                    )
+            cursor = conn.cursor()
+            for statement in statements:
+                processed_statement = cls.process_statement(
+                    statement, database, user_name
+                )
+                costs.append(cls.estimate_statement_cost(processed_statement, cursor))
         return costs
 
     @classmethod
@@ -862,19 +1037,19 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
             url.username = username
 
     @classmethod
-    def get_configuration_for_impersonation(  # pylint: disable=invalid-name
-        cls, uri: str, impersonate_user: bool, username: Optional[str]
-    ) -> Dict[str, str]:
+    def update_impersonation_config(
+        cls, connect_args: Dict[str, Any], uri: str, username: Optional[str],
+    ) -> None:
         """
-        Return a configuration dictionary that can be merged with other configs
+        Update a configuration dictionary
         that can set the correct properties for impersonating users
 
+        :param connect_args: config to be updated
         :param uri: URI
         :param impersonate_user: Flag indicating if impersonation is enabled
         :param username: Effective username
-        :return: Configs required for impersonation
+        :return: None
         """
-        return {}
 
     @classmethod
     def execute(cls, cursor: Any, query: str, **kwargs: Any) -> None:
@@ -886,9 +1061,15 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         :param kwargs: kwargs to be passed to cursor.execute()
         :return:
         """
+        if not cls.allows_sql_comments:
+            query = sql_parse.strip_comments_from_sql(query)
+
         if cls.arraysize:
             cursor.arraysize = cls.arraysize
-        cursor.execute(query)
+        try:
+            cursor.execute(query)
+        except Exception as ex:
+            raise cls.get_dbapi_mapped_exception(ex)
 
     @classmethod
     def make_label_compatible(cls, label: str) -> Union[str, quoted_name]:
@@ -914,24 +1095,35 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
         return label_mutated
 
     @classmethod
-    def get_sqla_column_type(cls, type_: Optional[str]) -> Optional[TypeEngine]:
+    def get_sqla_column_type(
+        cls,
+        column_type: Optional[str],
+        column_type_mappings: Tuple[
+            Tuple[
+                Pattern[str],
+                Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
+                GenericDataType,
+            ],
+            ...,
+        ] = column_type_mappings,
+    ) -> Union[Tuple[TypeEngine, GenericDataType], None]:
         """
         Return a sqlalchemy native column type that corresponds to the column type
         defined in the data source (return None to use default type inferred by
         SQLAlchemy). Override `column_type_mappings` for specific needs
         (see MSSQL for example of NCHAR/NVARCHAR handling).
 
-        :param type_: Column type returned by inspector
+        :param column_type: Column type returned by inspector
         :return: SqlAlchemy column type
         """
-        if not type_:
+        if not column_type:
             return None
-        for regex, sqla_type in cls.column_type_mappings:
-            match = regex.match(type_)
+        for regex, sqla_type, generic_type in column_type_mappings:
+            match = regex.match(column_type)
             if match:
                 if callable(sqla_type):
-                    return sqla_type(match)
-                return sqla_type
+                    return sqla_type(match), generic_type
+                return sqla_type, generic_type
         return None
 
     @staticmethod
@@ -1043,4 +1235,45 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
     @classmethod
     def is_readonly_query(cls, parsed_query: ParsedQuery) -> bool:
         """Pessimistic readonly, 100% sure statement won't mutate anything"""
-        return parsed_query.is_select() or parsed_query.is_explain()
+        return (
+            parsed_query.is_select()
+            or parsed_query.is_explain()
+            or parsed_query.is_show()
+        )
+
+    @classmethod
+    def get_column_spec(
+        cls,
+        native_type: Optional[str],
+        source: utils.ColumnTypeSource = utils.ColumnTypeSource.GET_TABLE,
+        column_type_mappings: Tuple[
+            Tuple[
+                Pattern[str],
+                Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
+                GenericDataType,
+            ],
+            ...,
+        ] = column_type_mappings,
+    ) -> Union[ColumnSpec, None]:
+        """
+        Converts native database type to sqlalchemy column type.
+        :param native_type: Native database typee
+        :param source: Type coming from the database table or cursor description
+        :return: ColumnSpec object
+        """
+        col_types = cls.get_sqla_column_type(
+            native_type, column_type_mappings=column_type_mappings
+        )
+        if col_types:
+            column_type, generic_type = col_types
+            # wrap temporal types in custom type that supports literal binding
+            # using datetimes
+            if generic_type == GenericDataType.TEMPORAL:
+                column_type = literal_dttm_type_factory(
+                    type(column_type), cls, native_type or ""
+                )
+            is_dttm = generic_type == GenericDataType.TEMPORAL
+            return ColumnSpec(
+                sqla_type=column_type, generic_type=generic_type, is_dttm=is_dttm
+            )
+        return None

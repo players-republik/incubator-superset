@@ -25,14 +25,26 @@ import { createErrorHandler } from 'src/views/CRUD/utils';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
 import SubMenu, { SubMenuProps } from 'src/components/Menu/SubMenu';
 import DeleteModal from 'src/components/DeleteModal';
-import TooltipWrapper from 'src/components/TooltipWrapper';
-import Icon from 'src/components/Icon';
+import { Tooltip } from 'src/common/components/Tooltip';
+import Icons from 'src/components/Icons';
 import ListView, { Filters } from 'src/components/ListView';
 import { commonMenuData } from 'src/views/CRUD/data/common';
+import ImportModelsModal from 'src/components/ImportModal/index';
 import DatabaseModal from './DatabaseModal';
 import { DatabaseObject } from './types';
 
 const PAGE_SIZE = 25;
+const PASSWORDS_NEEDED_MESSAGE = t(
+  'The passwords for the databases below are needed in order to ' +
+    'import them. Please note that the "Secure Extra" and "Certificate" ' +
+    'sections of the database configuration are not present in export ' +
+    'files, and should be added manually after the import if they are needed.',
+);
+const CONFIRM_OVERWRITE_MESSAGE = t(
+  'You are importing one or more databases that already exist. ' +
+    'Overwriting might cause you to lose some of your work. Are you ' +
+    'sure you want to overwrite?',
+);
 
 interface DatabaseDeleteObject extends DatabaseObject {
   chart_count: number;
@@ -43,12 +55,20 @@ interface DatabaseListProps {
   addSuccessToast: (msg: string) => void;
 }
 
-const IconBlack = styled(Icon)`
+const IconCheck = styled(Icons.Check)`
   color: ${({ theme }) => theme.colors.grayscale.dark1};
 `;
 
+const IconCancelX = styled(Icons.CancelX)`
+  color: ${({ theme }) => theme.colors.grayscale.dark1};
+`;
+
+const Actions = styled.div`
+  color: ${({ theme }) => theme.colors.grayscale.base};
+`;
+
 function BooleanDisplay({ value }: { value: Boolean }) {
-  return value ? <IconBlack name="check" /> : <IconBlack name="cancel-x" />;
+  return value ? <IconCheck /> : <IconCancelX />;
 }
 
 function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
@@ -74,6 +94,21 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
   const [currentDatabase, setCurrentDatabase] = useState<DatabaseObject | null>(
     null,
   );
+  const [importingDatabase, showImportModal] = useState<boolean>(false);
+  const [passwordFields, setPasswordFields] = useState<string[]>([]);
+
+  const openDatabaseImportModal = () => {
+    showImportModal(true);
+  };
+
+  const closeDatabaseImportModal = () => {
+    showImportModal(false);
+  };
+
+  const handleDatabaseImport = () => {
+    showImportModal(false);
+    refreshData();
+  };
 
   const openDatabaseDeleteModal = (database: DatabaseObject) =>
     SupersetClient.get({
@@ -118,11 +153,11 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
     setDatabaseModalOpen(true);
   }
 
-  const canCreate = hasPerm('can_add');
-  const canEdit = hasPerm('can_edit');
-  const canDelete = hasPerm('can_delete');
+  const canCreate = hasPerm('can_write');
+  const canEdit = hasPerm('can_write');
+  const canDelete = hasPerm('can_write');
   const canExport =
-    hasPerm('can_mulexport') && isFeatureEnabled(FeatureFlag.VERSIONED_EXPORT);
+    hasPerm('can_read') && isFeatureEnabled(FeatureFlag.VERSIONED_EXPORT);
 
   const menuData: SubMenuProps = {
     activeChild: 'Databases',
@@ -146,6 +181,14 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
         },
       },
     ];
+
+    if (isFeatureEnabled(FeatureFlag.VERSIONED_EXPORT)) {
+      menuData.buttons.push({
+        name: <Icons.Import />,
+        buttonStyle: 'link',
+        onClick: openDatabaseImportModal,
+      });
+    }
   }
 
   function handleDatabaseExport(database: DatabaseObject) {
@@ -164,54 +207,54 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
       {
         accessor: 'backend',
         Header: t('Backend'),
-        size: 'xxl',
+        size: 'lg',
         disableSortBy: true, // TODO: api support for sorting by 'backend'
       },
       {
         accessor: 'allow_run_async',
         Header: (
-          <TooltipWrapper
-            label="allow-run-async-header"
-            tooltip={t('Asynchronous Query Execution')}
+          <Tooltip
+            id="allow-run-async-header-tooltip"
+            title={t('Asynchronous query execution')}
             placement="top"
           >
             <span>{t('AQE')}</span>
-          </TooltipWrapper>
+          </Tooltip>
         ),
         Cell: ({
           row: {
             original: { allow_run_async: allowRunAsync },
           },
         }: any) => <BooleanDisplay value={allowRunAsync} />,
-        size: 'md',
+        size: 'sm',
       },
       {
         accessor: 'allow_dml',
         Header: (
-          <TooltipWrapper
-            label="allow-dml-header"
-            tooltip={t('Allow Data Manipulation Language')}
+          <Tooltip
+            id="allow-dml-header-tooltip"
+            title={t('Allow data manipulation language')}
             placement="top"
           >
             <span>{t('DML')}</span>
-          </TooltipWrapper>
+          </Tooltip>
         ),
         Cell: ({
           row: {
             original: { allow_dml: allowDML },
           },
         }: any) => <BooleanDisplay value={allowDML} />,
-        size: 'md',
+        size: 'sm',
       },
       {
         accessor: 'allow_csv_upload',
-        Header: t('CSV Upload'),
+        Header: t('CSV upload'),
         Cell: ({
           row: {
             original: { allow_csv_upload: allowCSVUpload },
           },
         }: any) => <BooleanDisplay value={allowCSVUpload} />,
-        size: 'xl',
+        size: 'md',
       },
       {
         accessor: 'expose_in_sqllab',
@@ -221,12 +264,12 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
             original: { expose_in_sqllab: exposeInSqllab },
           },
         }: any) => <BooleanDisplay value={exposeInSqllab} />,
-        size: 'xxl',
+        size: 'md',
       },
       {
         accessor: 'created_by',
         disableSortBy: true,
-        Header: t('Created By'),
+        Header: t('Created by'),
         Cell: ({
           row: {
             original: { created_by: createdBy },
@@ -241,7 +284,7 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
             original: { changed_on_delta_humanized: changedOn },
           },
         }: any) => changedOn,
-        Header: t('Last Modified'),
+        Header: t('Last modified'),
         accessor: 'changed_on_delta_humanized',
         size: 'xl',
       },
@@ -254,7 +297,7 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
             return null;
           }
           return (
-            <span className="actions">
+            <Actions className="actions">
               {canDelete && (
                 <span
                   role="button"
@@ -263,19 +306,19 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
                   data-test="database-delete"
                   onClick={handleDelete}
                 >
-                  <TooltipWrapper
-                    label="delete-action"
-                    tooltip={t('Delete database')}
+                  <Tooltip
+                    id="delete-action-tooltip"
+                    title={t('Delete database')}
                     placement="bottom"
                   >
-                    <Icon name="trash" />
-                  </TooltipWrapper>
+                    <Icons.Trash />
+                  </Tooltip>
                 </span>
               )}
               {canExport && (
-                <TooltipWrapper
-                  label="export-action"
-                  tooltip={t('Export')}
+                <Tooltip
+                  id="export-action-tooltip"
+                  title={t('Export')}
                   placement="bottom"
                 >
                   <span
@@ -284,14 +327,14 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
                     className="action-button"
                     onClick={handleExport}
                   >
-                    <Icon name="share" />
+                    <Icons.Share />
                   </span>
-                </TooltipWrapper>
+                </Tooltip>
               )}
               {canEdit && (
-                <TooltipWrapper
-                  label="edit-action"
-                  tooltip={t('Edit')}
+                <Tooltip
+                  id="edit-action-tooltip"
+                  title={t('Edit')}
                   placement="bottom"
                 >
                   <span
@@ -301,11 +344,11 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
                     className="action-button"
                     onClick={handleEdit}
                   >
-                    <Icon name="edit-alt" />
+                    <Icons.EditAlt data-test="edit-alt" />
                   </span>
-                </TooltipWrapper>
+                </Tooltip>
               )}
-            </span>
+            </Actions>
           );
         },
         Header: t('Actions'),
@@ -332,13 +375,13 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
       },
       {
         Header: (
-          <TooltipWrapper
-            label="allow-run-async-filter-header"
-            tooltip={t('Asynchronous Query Execution')}
+          <Tooltip
+            id="allow-run-async-filter-header-tooltip"
+            title={t('Asynchronous query execution')}
             placement="top"
           >
             <span>{t('AQE')}</span>
-          </TooltipWrapper>
+          </Tooltip>
         ),
         id: 'allow_run_async',
         input: 'select',
@@ -399,6 +442,20 @@ function DatabaseList({ addDangerToast, addSuccessToast }: DatabaseListProps) {
         initialSort={initialSort}
         loading={loading}
         pageSize={PAGE_SIZE}
+      />
+
+      <ImportModelsModal
+        resourceName="database"
+        resourceLabel={t('database')}
+        passwordsNeededMessage={PASSWORDS_NEEDED_MESSAGE}
+        confirmOverwriteMessage={CONFIRM_OVERWRITE_MESSAGE}
+        addDangerToast={addDangerToast}
+        addSuccessToast={addSuccessToast}
+        onModelImport={handleDatabaseImport}
+        show={importingDatabase}
+        onHide={closeDatabaseImportModal}
+        passwordFields={passwordFields}
+        setPasswordFields={setPasswordFields}
       />
     </>
   );

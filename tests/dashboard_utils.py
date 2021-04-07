@@ -17,7 +17,7 @@
 """Utils to provide dashboards for tests"""
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from pandas import DataFrame
 
@@ -29,7 +29,12 @@ from superset.models.slice import Slice
 
 
 def create_table_for_dashboard(
-    df: DataFrame, table_name: str, database: Database, dtype: Dict[str, Any]
+    df: DataFrame,
+    table_name: str,
+    database: Database,
+    dtype: Dict[str, Any],
+    table_description: str = "",
+    fetch_values_predicate: Optional[str] = None,
 ) -> SqlaTable:
     df.to_sql(
         table_name,
@@ -47,7 +52,10 @@ def create_table_for_dashboard(
     )
     if not table:
         table = table_source(table_name=table_name)
+    if fetch_values_predicate:
+        table.fetch_values_predicate = fetch_values_predicate
     table.database = database
+    table.description = table_description
     db.session.merge(table)
     db.session.commit()
 
@@ -66,7 +74,9 @@ def create_slice(
     )
 
 
-def create_dashboard(slug: str, title: str, position: str, slice: Slice) -> Dashboard:
+def create_dashboard(
+    slug: str, title: str, position: str, slices: List[Slice]
+) -> Dashboard:
     dash = db.session.query(Dashboard).filter_by(slug=slug).one_or_none()
 
     if not dash:
@@ -77,8 +87,8 @@ def create_dashboard(slug: str, title: str, position: str, slice: Slice) -> Dash
         pos = json.loads(js)
         dash.position_json = json.dumps(pos, indent=4)
     dash.slug = slug
-    if slice is not None:
-        dash.slices = [slice]
+    if slices is not None:
+        dash.slices = slices
     db.session.merge(dash)
     db.session.commit()
 

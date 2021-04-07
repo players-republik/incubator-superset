@@ -25,7 +25,7 @@ from superset.commands.exceptions import (
     ImportFailedError,
     UpdateFailedError,
 )
-from superset.security.analytics_db_safety import DBSecurityException
+from superset.exceptions import SupersetErrorException
 
 
 class DatabaseInvalidError(CommandInvalidError):
@@ -102,7 +102,7 @@ class DatabaseUpdateFailedError(UpdateFailedError):
 class DatabaseConnectionFailedError(  # pylint: disable=too-many-ancestors
     DatabaseCreateFailedError, DatabaseUpdateFailedError,
 ):
-    message = _("Could not connect to database.")
+    message = _("Connection failed, please check your connection settings")
 
 
 class DatabaseDeleteDatasetsExistFailedError(DeleteFailedError):
@@ -117,9 +117,26 @@ class DatabaseDeleteFailedReportsExistError(DatabaseDeleteFailedError):
     message = _("There are associated alerts or reports")
 
 
-class DatabaseSecurityUnsafeError(DBSecurityException):
+class DatabaseTestConnectionFailedError(CommandException):
+    status = 422
+    message = _("Connection failed, please check your connection settings")
+
+
+class DatabaseSecurityUnsafeError(DatabaseTestConnectionFailedError):
     message = _("Stopped an unsafe database connection")
+
+
+class DatabaseTestConnectionDriverError(DatabaseTestConnectionFailedError):
+    message = _("Could not load database driver")
+
+
+class DatabaseTestConnectionUnexpectedError(DatabaseTestConnectionFailedError):
+    message = _("Unexpected error occurred, please check your logs for details")
 
 
 class DatabaseImportError(ImportFailedError):
     message = _("Import database failed for an unknown reason")
+
+
+class DatabaseTestConnectionNetworkError(SupersetErrorException):
+    status = 400

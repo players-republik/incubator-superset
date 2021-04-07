@@ -25,14 +25,12 @@ import { initEnhancer } from '../reduxUtils';
 import getInitialState from './reducers/getInitialState';
 import rootReducer from './reducers/index';
 import logger from '../middleware/loggerMiddleware';
-
 import App from './App';
 
 const appContainer = document.getElementById('app');
 const bootstrapData = JSON.parse(appContainer.getAttribute('data-bootstrap'));
 initFeatureFlags(bootstrapData.common.feature_flags);
 const initState = getInitialState(bootstrapData);
-
 const store = createStore(
   rootReducer,
   initState,

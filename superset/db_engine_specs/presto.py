@@ -23,7 +23,19 @@ from collections import defaultdict, deque
 from contextlib import closing
 from datetime import datetime
 from distutils.version import StrictVersion
-from typing import Any, cast, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Callable,
+    cast,
+    Dict,
+    List,
+    Match,
+    Optional,
+    Pattern,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 from urllib import parse
 
 import pandas as pd
@@ -33,11 +45,12 @@ from sqlalchemy import Column, literal_column, types
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.engine.result import RowProxy
-from sqlalchemy.engine.url import URL
+from sqlalchemy.engine.url import make_url, URL
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import ColumnClause, Select
+from sqlalchemy.types import TypeEngine
 
-from superset import app, cache_manager, is_feature_enabled, security_manager
+from superset import app, cache_manager, is_feature_enabled
 from superset.db_engine_specs.base import BaseEngineSpec
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetTemplateException
@@ -52,6 +65,7 @@ from superset.models.sql_types.presto_sql_types import (
 from superset.result_set import destringify
 from superset.sql_parse import ParsedQuery
 from superset.utils import core as utils
+from superset.utils.core import ColumnSpec, GenericDataType
 
 if TYPE_CHECKING:
     # prevent circular imports
@@ -114,6 +128,7 @@ def get_children(column: Dict[str, str]) -> List[Dict[str, str]]:
 class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-methods
     engine = "presto"
     engine_name = "Presto"
+    allows_alias_to_source_column = False
 
     _time_grain_expressions = {
         None: "{col}",
@@ -132,8 +147,31 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
     }
 
     @classmethod
-    def get_allow_cost_estimate(cls, version: Optional[str] = None) -> bool:
+    def get_allow_cost_estimate(cls, extra: Dict[str, Any]) -> bool:
+        version = extra.get("version")
         return version is not None and StrictVersion(version) >= StrictVersion("0.319")
+
+    @classmethod
+    def update_impersonation_config(
+        cls, connect_args: Dict[str, Any], uri: str, username: Optional[str],
+    ) -> None:
+        """
+        Update a configuration dictionary
+        that can set the correct properties for impersonating users
+        :param connect_args: config to be updated
+        :param uri: URI string
+        :param impersonate_user: Flag indicating if impersonation is enabled
+        :param username: Effective username
+        :return: None
+        """
+        url = make_url(uri)
+        backend_name = url.get_backend_name()
+
+        # Must be Presto connection, enable impersonation, and set optional param
+        # auth=LDAP|KERBEROS
+        # Set principal_username=$effective_username
+        if backend_name == "presto" and username is not None:
+            connect_args["principal_username"] = username
 
     @classmethod
     def get_table_names(
@@ -172,9 +210,9 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
         engine = cls.get_engine(database, schema=schema)
         with closing(engine.raw_connection()) as conn:
-            with closing(conn.cursor()) as cursor:
-                cursor.execute(sql, params)
-                results = cursor.fetchall()
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            results = cursor.fetchall()
 
         return [row[0] for row in results]
 
@@ -270,7 +308,8 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
                         field_info = cls._split_data_type(single_field, r"\s")
                         # check if there is a structural data type within
                         # overall structural data type
-                        column_type = cls.get_sqla_column_type(field_info[1])
+                        column_spec = cls.get_column_spec(field_info[1])
+                        column_type = column_spec.sqla_type if column_spec else None
                         if column_type is None:
                             column_type = types.String()
                             logger.info(
@@ -333,31 +372,89 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         return columns
 
     column_type_mappings = (
-        (re.compile(r"^boolean.*", re.IGNORECASE), types.Boolean()),
-        (re.compile(r"^tinyint.*", re.IGNORECASE), TinyInteger()),
-        (re.compile(r"^smallint.*", re.IGNORECASE), types.SmallInteger()),
-        (re.compile(r"^integer.*", re.IGNORECASE), types.Integer()),
-        (re.compile(r"^bigint.*", re.IGNORECASE), types.BigInteger()),
-        (re.compile(r"^real.*", re.IGNORECASE), types.Float()),
-        (re.compile(r"^double.*", re.IGNORECASE), types.Float()),
-        (re.compile(r"^decimal.*", re.IGNORECASE), types.DECIMAL()),
+        (
+            re.compile(r"^boolean.*", re.IGNORECASE),
+            types.BOOLEAN,
+            utils.GenericDataType.BOOLEAN,
+        ),
+        (
+            re.compile(r"^tinyint.*", re.IGNORECASE),
+            TinyInteger(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^smallint.*", re.IGNORECASE),
+            types.SMALLINT(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^integer.*", re.IGNORECASE),
+            types.INTEGER(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^bigint.*", re.IGNORECASE),
+            types.BIGINT(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^real.*", re.IGNORECASE),
+            types.FLOAT(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^double.*", re.IGNORECASE),
+            types.FLOAT(),
+            utils.GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^decimal.*", re.IGNORECASE),
+            types.DECIMAL(),
+            utils.GenericDataType.NUMERIC,
+        ),
         (
             re.compile(r"^varchar(\((\d+)\))*$", re.IGNORECASE),
             lambda match: types.VARCHAR(int(match[2])) if match[2] else types.String(),
+            utils.GenericDataType.STRING,
         ),
         (
             re.compile(r"^char(\((\d+)\))*$", re.IGNORECASE),
             lambda match: types.CHAR(int(match[2])) if match[2] else types.CHAR(),
+            utils.GenericDataType.STRING,
         ),
-        (re.compile(r"^varbinary.*", re.IGNORECASE), types.VARBINARY()),
-        (re.compile(r"^json.*", re.IGNORECASE), types.JSON()),
-        (re.compile(r"^date.*", re.IGNORECASE), types.DATE()),
-        (re.compile(r"^time.*", re.IGNORECASE), types.Time()),
-        (re.compile(r"^timestamp.*", re.IGNORECASE), types.TIMESTAMP()),
-        (re.compile(r"^interval.*", re.IGNORECASE), Interval()),
-        (re.compile(r"^array.*", re.IGNORECASE), Array()),
-        (re.compile(r"^map.*", re.IGNORECASE), Map()),
-        (re.compile(r"^row.*", re.IGNORECASE), Row()),
+        (
+            re.compile(r"^varbinary.*", re.IGNORECASE),
+            types.VARBINARY(),
+            utils.GenericDataType.STRING,
+        ),
+        (
+            re.compile(r"^json.*", re.IGNORECASE),
+            types.JSON(),
+            utils.GenericDataType.STRING,
+        ),
+        (
+            re.compile(r"^date.*", re.IGNORECASE),
+            types.DATE(),
+            utils.GenericDataType.TEMPORAL,
+        ),
+        (
+            re.compile(r"^timestamp.*", re.IGNORECASE),
+            types.TIMESTAMP(),
+            utils.GenericDataType.TEMPORAL,
+        ),
+        (
+            re.compile(r"^interval.*", re.IGNORECASE),
+            Interval(),
+            utils.GenericDataType.TEMPORAL,
+        ),
+        (
+            re.compile(r"^time.*", re.IGNORECASE),
+            types.Time(),
+            utils.GenericDataType.TEMPORAL,
+        ),
+        (re.compile(r"^array.*", re.IGNORECASE), Array(), utils.GenericDataType.STRING),
+        (re.compile(r"^map.*", re.IGNORECASE), Map(), utils.GenericDataType.STRING),
+        (re.compile(r"^row.*", re.IGNORECASE), Row(), utils.GenericDataType.STRING),
     )
 
     @classmethod
@@ -389,7 +486,8 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
                 continue
 
             # otherwise column is a basic data type
-            column_type = cls.get_sqla_column_type(column.Type)
+            column_spec = cls.get_column_spec(column.Type)
+            column_type = column_spec.sqla_type if column_spec else None
             if column_type is None:
                 column_type = types.String()
                 logger.info(
@@ -484,7 +582,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
     @classmethod
     def estimate_statement_cost(  # pylint: disable=too-many-locals
-        cls, statement: str, database: "Database", cursor: Any, user_name: str
+        cls, statement: str, cursor: Any
     ) -> Dict[str, Any]:
         """
         Run a SQL query that estimates the cost of a given statement.
@@ -495,14 +593,7 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
         :param username: Effective username
         :return: JSON response from Presto
         """
-        parsed_query = ParsedQuery(statement)
-        sql = parsed_query.stripped()
-
-        sql_query_mutator = config["SQL_QUERY_MUTATOR"]
-        if sql_query_mutator:
-            sql = sql_query_mutator(sql, user_name, security_manager, database)
-
-        sql = f"EXPLAIN (TYPE IO, FORMAT JSON) {sql}"
+        sql = f"EXPLAIN (TYPE IO, FORMAT JSON) {statement}"
         cursor.execute(sql)
 
         # the output from Presto is a single column and a single row containing
@@ -764,18 +855,18 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
 
         engine = cls.get_engine(database, schema)
         with closing(engine.raw_connection()) as conn:
-            with closing(conn.cursor()) as cursor:
-                sql = f"SHOW CREATE VIEW {schema}.{table}"
-                try:
-                    cls.execute(cursor, sql)
-                    polled = cursor.poll()
+            cursor = conn.cursor()
+            sql = f"SHOW CREATE VIEW {schema}.{table}"
+            try:
+                cls.execute(cursor, sql)
+                polled = cursor.poll()
 
-                    while polled:
-                        time.sleep(0.2)
-                        polled = cursor.poll()
-                except DatabaseError:  # not a VIEW
-                    return None
-                rows = cls.fetch_data(cursor, 1)
+                while polled:
+                    time.sleep(0.2)
+                    polled = cursor.poll()
+            except DatabaseError:  # not a VIEW
+                return None
+            rows = cls.fetch_data(cursor, 1)
         return rows[0][0]
 
     @classmethod
@@ -1095,3 +1186,27 @@ class PrestoEngineSpec(BaseEngineSpec):  # pylint: disable=too-many-public-metho
     def is_readonly_query(cls, parsed_query: ParsedQuery) -> bool:
         """Pessimistic readonly, 100% sure statement won't mutate anything"""
         return super().is_readonly_query(parsed_query) or parsed_query.is_show()
+
+    @classmethod
+    def get_column_spec(  # type: ignore
+        cls,
+        native_type: Optional[str],
+        source: utils.ColumnTypeSource = utils.ColumnTypeSource.GET_TABLE,
+        column_type_mappings: Tuple[
+            Tuple[
+                Pattern[str],
+                Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
+                GenericDataType,
+            ],
+            ...,
+        ] = column_type_mappings,
+    ) -> Union[ColumnSpec, None]:
+
+        column_spec = super().get_column_spec(
+            native_type, column_type_mappings=column_type_mappings
+        )
+
+        if column_spec:
+            return column_spec
+
+        return super().get_column_spec(native_type)

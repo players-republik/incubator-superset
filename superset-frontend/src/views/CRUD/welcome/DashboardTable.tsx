@@ -20,13 +20,14 @@ import React, { useState, useMemo } from 'react';
 import { SupersetClient, t } from '@superset-ui/core';
 import { useListViewResource, useFavoriteStatus } from 'src/views/CRUD/hooks';
 import { Dashboard, DashboardTableProps } from 'src/views/CRUD/types';
+import { useHistory } from 'react-router-dom';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
+import Loading from 'src/components/Loading';
 import PropertiesModal from 'src/dashboard/components/PropertiesModal';
 import DashboardCard from 'src/views/CRUD/dashboard/DashboardCard';
 import SubMenu from 'src/components/Menu/SubMenu';
-import Icon from 'src/components/Icon';
 import EmptyState from './EmptyState';
-import { createErrorHandler, CardContainer, IconContainer } from '../utils';
+import { createErrorHandler, CardContainer } from '../utils';
 
 const PAGE_SIZE = 3;
 
@@ -41,7 +42,10 @@ function DashboardTable({
   addDangerToast,
   addSuccessToast,
   mine,
+  showThumbnails,
+  featureFlag,
 }: DashboardTableProps) {
+  const history = useHistory();
   const {
     state: { loading, resourceCollection: dashboards },
     setResourceCollection: setDashboards,
@@ -54,6 +58,8 @@ function DashboardTable({
     addDangerToast,
     true,
     mine,
+    [],
+    false,
   );
   const dashboardIds = useMemo(() => dashboards.map(c => c.id), [dashboards]);
   const [saveFavoriteStatus, favoriteStatus] = useFavoriteStatus(
@@ -64,8 +70,8 @@ function DashboardTable({
   const [editModal, setEditModal] = useState<Dashboard>();
   const [dashboardFilter, setDashboardFilter] = useState('Mine');
 
-  const handleDashboardEdit = (edits: Dashboard) => {
-    return SupersetClient.get({
+  const handleDashboardEdit = (edits: Dashboard) =>
+    SupersetClient.get({
       endpoint: `/api/v1/dashboard/${edits.id}`,
     }).then(
       ({ json = {} }) => {
@@ -84,7 +90,6 @@ function DashboardTable({
         ),
       ),
     );
-  };
 
   const getFilters = (filterName: string) => {
     const filters = [];
@@ -97,7 +102,7 @@ function DashboardTable({
     } else {
       filters.push({
         id: 'id',
-        operator: 'dashboard_is_fav',
+        operator: 'dashboard_is_favorite',
         value: true,
       });
     }
@@ -112,8 +117,8 @@ function DashboardTable({
     });
   }
 
-  const getData = (filter: string) => {
-    return fetchData({
+  const getData = (filter: string) =>
+    fetchData({
       pageIndex: 0,
       pageSize: PAGE_SIZE,
       sortBy: [
@@ -124,8 +129,8 @@ function DashboardTable({
       ],
       filters: getFilters(filter),
     });
-  };
 
+  if (loading) return <Loading position="inline" />;
   return (
     <>
       <SubMenu
@@ -149,20 +154,25 @@ function DashboardTable({
         buttons={[
           {
             name: (
-              <IconContainer>
-                <Icon name="plus-small" /> Dashboard{' '}
-              </IconContainer>
+              <>
+                <i className="fa fa-plus" />
+                Dashboard
+              </>
             ),
             buttonStyle: 'tertiary',
             onClick: () => {
-              window.location.href = '/dashboard/new';
+              window.location.assign('/dashboard/new');
             },
           },
           {
             name: 'View All »',
             buttonStyle: 'link',
             onClick: () => {
-              window.location.href = '/dashboard/list/';
+              const target =
+                dashboardFilter === 'Favorite'
+                  ? '/dashboard/list/?filters=(favorite:!t)'
+                  : '/dashboard/list/';
+              history.push(target);
             },
           },
         ]}
@@ -183,6 +193,8 @@ function DashboardTable({
               dashboard={e}
               hasPerm={hasPerm}
               bulkSelectEnabled={false}
+              featureFlag={featureFlag}
+              showThumbnails={showThumbnails}
               dashboardFilter={dashboardFilter}
               refreshData={refreshData}
               addDangerToast={addDangerToast}

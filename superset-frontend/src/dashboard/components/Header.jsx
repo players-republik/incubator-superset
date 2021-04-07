@@ -21,7 +21,7 @@ import moment from 'moment';
 import React from 'react';
 import PropTypes from 'prop-types';
 import { styled, CategoricalColorNamespace, t } from '@superset-ui/core';
-import { ButtonGroup } from 'react-bootstrap';
+import ButtonGroup from 'src/components/ButtonGroup';
 
 import {
   LOG_ACTIONS_PERIODIC_RENDER_DASHBOARD,
@@ -102,6 +102,14 @@ const defaultProps = {
 
 // Styled Components
 const StyledDashboardHeader = styled.div`
+  background: ${({ theme }) => theme.colors.grayscale.light5};
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 ${({ theme }) => theme.gridUnit * 6}px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.grayscale.light2};
+
   button,
   .fave-unfave-icon {
     margin-left: ${({ theme }) => theme.gridUnit * 2}px;
@@ -379,6 +387,7 @@ class Header extends React.PureComponent {
       <StyledDashboardHeader
         className="dashboard-header"
         data-test="dashboard-header"
+        data-test-id={`${dashboardInfo.id}`}
       >
         <div className="dashboard-component-header header-large">
           <EditableTitle
@@ -448,7 +457,7 @@ class Header extends React.PureComponent {
                     buttonStyle="default"
                     data-test="discard-changes-button"
                   >
-                    {t('Discard Changes')}
+                    {t('Discard changes')}
                   </Button>
                   <Button
                     buttonSize="small"
@@ -471,14 +480,17 @@ class Header extends React.PureComponent {
           )}
 
           {!editMode && userCanEdit && (
-            <span
-              role="button"
-              tabIndex={0}
-              className="action-button"
-              onClick={this.toggleEditMode}
-            >
-              <Icon name="edit-alt" />
-            </span>
+            <>
+              <span
+                role="button"
+                title={t('Edit dashboard')}
+                tabIndex={0}
+                className="action-button"
+                onClick={this.toggleEditMode}
+              >
+                <Icon name="edit-alt" />
+              </span>
+            </>
           )}
 
           {this.state.showingPropertiesModal && (

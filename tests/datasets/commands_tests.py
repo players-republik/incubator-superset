@@ -17,6 +17,7 @@
 # pylint: disable=no-self-use, invalid-name, line-too-long
 
 from operator import itemgetter
+from typing import Any, List
 from unittest.mock import patch
 
 import pytest
@@ -33,6 +34,7 @@ from superset.datasets.commands.importers import v0, v1
 from superset.models.core import Database
 from superset.utils.core import get_example_database
 from tests.base_tests import SupersetTestCase
+from tests.fixtures.energy_dashboard import load_energy_table_with_slice
 from tests.fixtures.importexport import (
     database_config,
     database_metadata_config,
@@ -41,15 +43,19 @@ from tests.fixtures.importexport import (
     dataset_metadata_config,
     dataset_ui_export,
 )
+from tests.fixtures.world_bank_dashboard import load_world_bank_dashboard_with_slices
 
 
 class TestExportDatasetsCommand(SupersetTestCase):
     @patch("superset.security.manager.g")
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_export_dataset_command(self, mock_g):
         mock_g.user = security_manager.find_user("admin")
 
         example_db = get_example_database()
-        example_dataset = example_db.tables[0]
+        example_dataset = _get_table_from_list_by_name(
+            "energy_usage", example_db.tables
+        )
         command = ExportDatasetsCommand([example_dataset.id])
         contents = dict(command.run())
 
@@ -76,7 +82,7 @@ class TestExportDatasetsCommand(SupersetTestCase):
                 {
                     "column_name": "source",
                     "description": None,
-                    "expression": None,
+                    "expression": "",
                     "filterable": True,
                     "groupby": True,
                     "is_active": True,
@@ -88,7 +94,7 @@ class TestExportDatasetsCommand(SupersetTestCase):
                 {
                     "column_name": "target",
                     "description": None,
-                    "expression": None,
+                    "expression": "",
                     "filterable": True,
                     "groupby": True,
                     "is_active": True,
@@ -100,7 +106,7 @@ class TestExportDatasetsCommand(SupersetTestCase):
                 {
                     "column_name": "value",
                     "description": None,
-                    "expression": None,
+                    "expression": "",
                     "filterable": True,
                     "groupby": True,
                     "is_active": True,
@@ -171,12 +177,15 @@ class TestExportDatasetsCommand(SupersetTestCase):
             next(contents)
 
     @patch("superset.security.manager.g")
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_export_dataset_command_key_order(self, mock_g):
         """Test that they keys in the YAML have the same order as export_fields"""
         mock_g.user = security_manager.find_user("admin")
 
         example_db = get_example_database()
-        example_dataset = example_db.tables[0]
+        example_dataset = _get_table_from_list_by_name(
+            "energy_usage", example_db.tables
+        )
         command = ExportDatasetsCommand([example_dataset.id])
         contents = dict(command.run())
 
@@ -204,6 +213,7 @@ class TestExportDatasetsCommand(SupersetTestCase):
 
 
 class TestImportDatasetsCommand(SupersetTestCase):
+    @pytest.mark.usefixtures("load_world_bank_dashboard_with_slices")
     def test_import_v0_dataset_cli_export(self):
         num_datasets = db.session.query(SqlaTable).count()
 
@@ -226,20 +236,24 @@ class TestImportDatasetsCommand(SupersetTestCase):
         assert len(dataset.metrics) == 2
         assert dataset.main_dttm_col == "ds"
         assert dataset.filter_select_enabled
-        assert [col.column_name for col in dataset.columns] == [
+        dataset.columns.sort(key=lambda obj: obj.column_name)
+        expected_columns = [
             "num_california",
             "ds",
             "state",
             "gender",
             "name",
-            "sum_boys",
-            "sum_girls",
+            "num_boys",
+            "num_girls",
             "num",
         ]
+        expected_columns.sort()
+        assert [col.column_name for col in dataset.columns] == expected_columns
 
         db.session.delete(dataset)
         db.session.commit()
 
+    @pytest.mark.usefixtures("load_world_bank_dashboard_with_slices")
     def test_import_v0_dataset_ui_export(self):
         num_datasets = db.session.query(SqlaTable).count()
 
@@ -262,16 +276,16 @@ class TestImportDatasetsCommand(SupersetTestCase):
         assert len(dataset.metrics) == 2
         assert dataset.main_dttm_col == "ds"
         assert dataset.filter_select_enabled
-        assert [col.column_name for col in dataset.columns] == [
+        assert set(col.column_name for col in dataset.columns) == {
             "num_california",
             "ds",
             "state",
             "gender",
             "name",
-            "sum_boys",
-            "sum_girls",
+            "num_boys",
+            "num_girls",
             "num",
-        ]
+        }
 
         db.session.delete(dataset)
         db.session.commit()
@@ -298,7 +312,7 @@ class TestImportDatasetsCommand(SupersetTestCase):
         assert dataset.schema == ""
         assert dataset.sql == ""
         assert dataset.params is None
-        assert dataset.template_params is None
+        assert dataset.template_params == "{}"
         assert dataset.filter_select_enabled
         assert dataset.fetch_values_predicate is None
         assert dataset.extra is None
@@ -341,7 +355,7 @@ class TestImportDatasetsCommand(SupersetTestCase):
             "databases/imported_database.yaml": yaml.safe_dump(database_config),
             "datasets/imported_dataset.yaml": yaml.safe_dump(dataset_config),
         }
-        command = v1.ImportDatasetsCommand(contents)
+        command = v1.ImportDatasetsCommand(contents, overwrite=True)
         command.run()
         command.run()
         dataset = (
@@ -359,7 +373,7 @@ class TestImportDatasetsCommand(SupersetTestCase):
             "databases/imported_database.yaml": yaml.safe_dump(database_config),
             "datasets/imported_dataset.yaml": yaml.safe_dump(new_config),
         }
-        command = v1.ImportDatasetsCommand(contents)
+        command = v1.ImportDatasetsCommand(contents, overwrite=True)
         command.run()
         dataset = (
             db.session.query(SqlaTable).filter_by(uuid=dataset_config["uuid"]).one()
@@ -443,7 +457,7 @@ class TestImportDatasetsCommand(SupersetTestCase):
             "datasets/imported_dataset.yaml": yaml.safe_dump(dataset_config),
             "databases/imported_database.yaml": yaml.safe_dump(database_config),
         }
-        command = v1.ImportDatasetsCommand(contents)
+        command = v1.ImportDatasetsCommand(contents, overwrite=True)
         command.run()
 
         database = (
@@ -454,3 +468,10 @@ class TestImportDatasetsCommand(SupersetTestCase):
         db.session.delete(database.tables[0])
         db.session.delete(database)
         db.session.commit()
+
+
+def _get_table_from_list_by_name(name: str, tables: List[Any]):
+    for table in tables:
+        if table.table_name == name:
+            return table
+    raise ValueError(f"Table {name} does not exists in database")

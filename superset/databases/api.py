@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import json
 import logging
 from datetime import datetime
 from io import BytesIO
@@ -23,21 +24,13 @@ from zipfile import ZipFile
 from flask import g, request, Response, send_file
 from flask_appbuilder.api import expose, protect, rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_babel import gettext as _
 from marshmallow import ValidationError
-from sqlalchemy.engine.url import make_url
-from sqlalchemy.exc import (
-    DBAPIError,
-    NoSuchModuleError,
-    NoSuchTableError,
-    OperationalError,
-    SQLAlchemyError,
-)
+from sqlalchemy.exc import NoSuchTableError, OperationalError, SQLAlchemyError
 
 from superset import event_logger
 from superset.commands.exceptions import CommandInvalidError
-from superset.commands.importers.v1.utils import remove_root
-from superset.constants import RouteMethod
+from superset.commands.importers.v1.utils import get_contents_from_bundle
+from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.databases.commands.create import CreateDatabaseCommand
 from superset.databases.commands.delete import DeleteDatabaseCommand
 from superset.databases.commands.exceptions import (
@@ -48,7 +41,6 @@ from superset.databases.commands.exceptions import (
     DatabaseImportError,
     DatabaseInvalidError,
     DatabaseNotFoundError,
-    DatabaseSecurityUnsafeError,
     DatabaseUpdateFailedError,
 )
 from superset.databases.commands.export import ExportDatabasesCommand
@@ -60,6 +52,7 @@ from superset.databases.decorators import check_datasource_access
 from superset.databases.filters import DatabaseFilter
 from superset.databases.schemas import (
     database_schemas_query_schema,
+    DatabaseFunctionNamesResponse,
     DatabasePostSchema,
     DatabasePutSchema,
     DatabaseRelatedObjectsResponse,
@@ -90,9 +83,11 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
         "schemas",
         "test_connection",
         "related_objects",
+        "function_names",
     }
-    class_permission_name = "DatabaseView"
     resource_name = "database"
+    class_permission_name = "Database"
+    method_permission_name = MODEL_API_RW_METHOD_PERMISSION_MAP
     allow_browser_login = True
     base_filters = [["id", DatabaseFilter, lambda: []]]
     show_columns = [
@@ -132,7 +127,6 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
         "explore_database_id",
         "expose_in_sqllab",
         "force_ctas_schema",
-        "function_names",
         "id",
     ]
     add_columns = [
@@ -176,7 +170,9 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     }
     openapi_spec_tag = "Database"
     openapi_spec_component_schemas = (
+        DatabaseFunctionNamesResponse,
         DatabaseRelatedObjectsResponse,
+        DatabaseTestConnectionSchema,
         TableMetadataResponseSchema,
         SelectStarResponseSchema,
         SchemasResponseSchema,
@@ -186,7 +182,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.post",
+        log_to_statsd=False,
+    )
     def post(self) -> Response:
         """Creates a new Database
         ---
@@ -249,7 +248,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.put",
+        log_to_statsd=False,
+    )
     def put(  # pylint: disable=too-many-return-statements, arguments-differ
         self, pk: int
     ) -> Response:
@@ -323,7 +325,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}" f".delete",
+        log_to_statsd=False,
+    )
     def delete(self, pk: int) -> Response:  # pylint: disable=arguments-differ
         """Deletes a Database
         ---
@@ -374,7 +379,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @safe
     @rison(database_schemas_query_schema)
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}" f".schemas",
+        log_to_statsd=False,
+    )
     def schemas(self, pk: int, **kwargs: Any) -> FlaskResponse:
         """Get all schemas from a database
         ---
@@ -429,7 +437,11 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @check_datasource_access
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
+        f".table_metadata",
+        log_to_statsd=False,
+    )
     def table_metadata(
         self, database: Database, table_name: str, schema_name: str
     ) -> FlaskResponse:
@@ -486,7 +498,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @check_datasource_access
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.select_star",
+        log_to_statsd=False,
+    )
     def select_star(
         self, database: Database, table_name: str, schema_name: Optional[str] = None
     ) -> FlaskResponse:
@@ -541,9 +556,12 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
 
     @expose("/test_connection", methods=["POST"])
     @protect()
-    @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
+        f".test_connection",
+        log_to_statsd=False,
+    )
     def test_connection(  # pylint: disable=too-many-return-statements
         self,
     ) -> FlaskResponse:
@@ -558,16 +576,7 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
             content:
               application/json:
                 schema:
-                  type: object
-                  properties:
-                    encrypted_extra:
-                      type: object
-                    extras:
-                      type: object
-                    name:
-                      type: string
-                    server_cert:
-                      type: string
+                  $ref: "#/components/schemas/DatabaseTestConnectionSchema"
           responses:
             200:
               description: Database Test Connection
@@ -592,38 +601,18 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
         # This validates custom Schema with custom validations
         except ValidationError as error:
             return self.response_400(message=error.messages)
-        try:
-            TestConnectionDatabaseCommand(g.user, item).run()
-            return self.response(200, message="OK")
-        except (NoSuchModuleError, ModuleNotFoundError):
-            logger.info("Invalid driver")
-            driver_name = make_url(item.get("sqlalchemy_uri")).drivername
-            return self.response(
-                400,
-                message=_("Could not load database driver: {}").format(driver_name),
-                driver_name=driver_name,
-            )
-        except DatabaseSecurityUnsafeError as ex:
-            return self.response_422(message=ex)
-        except DBAPIError:
-            logger.warning("Connection failed")
-            return self.response(
-                500,
-                message=_("Connection failed, please check your connection settings"),
-            )
-        except Exception as ex:  # pylint: disable=broad-except
-            logger.error("Unexpected error %s", type(ex).__name__)
-            return self.response_400(
-                message=_(
-                    "Unexpected error occurred, please check your logs for details"
-                )
-            )
+        TestConnectionDatabaseCommand(g.user, item).run()
+        return self.response(200, message="OK")
 
     @expose("/<int:pk>/related_objects/", methods=["GET"])
     @protect()
     @safe
     @statsd_metrics
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
+        f".related_objects",
+        log_to_statsd=False,
+    )
     def related_objects(self, pk: int) -> Response:
         """Get charts and dashboards count associated to a database
         ---
@@ -650,8 +639,8 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
             500:
               $ref: '#/components/responses/500'
         """
-        dataset = DatabaseDAO.find_by_id(pk)
-        if not dataset:
+        database = DatabaseDAO.find_by_id(pk)
+        if not database:
             return self.response_404()
         data = DatabaseDAO.get_related_objects(pk)
         charts = [
@@ -682,7 +671,10 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @rison(get_export_ids_schema)
-    @event_logger.log_this_with_context(log_to_statsd=False)
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.export",
+        log_to_statsd=False,
+    )
     def export(self, **kwargs: Any) -> Response:
         """Export database(s) with associated datasets
         ---
@@ -738,16 +730,31 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.import_",
+        log_to_statsd=False,
+    )
     def import_(self) -> Response:
         """Import database(s) with associated datasets
         ---
         post:
           requestBody:
+            required: true
             content:
-              application/zip:
+              multipart/form-data:
                 schema:
-                  type: string
-                  format: binary
+                  type: object
+                  properties:
+                    formData:
+                      description: upload file (ZIP)
+                      type: string
+                      format: binary
+                    passwords:
+                      description: JSON map of passwords for each file
+                      type: string
+                    overwrite:
+                      description: overwrite existing databases?
+                      type: bool
           responses:
             200:
               description: Database import result
@@ -771,12 +778,18 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
         if not upload:
             return self.response_400()
         with ZipFile(upload) as bundle:
-            contents = {
-                remove_root(file_name): bundle.read(file_name).decode()
-                for file_name in bundle.namelist()
-            }
+            contents = get_contents_from_bundle(bundle)
 
-        command = ImportDatabasesCommand(contents)
+        passwords = (
+            json.loads(request.form["passwords"])
+            if "passwords" in request.form
+            else None
+        )
+        overwrite = request.form.get("overwrite") == "true"
+
+        command = ImportDatabasesCommand(
+            contents, passwords=passwords, overwrite=overwrite
+        )
         try:
             command.run()
             return self.response(200, message="OK")
@@ -784,5 +797,45 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
             logger.warning("Import database failed")
             return self.response_422(message=exc.normalized_messages())
         except DatabaseImportError as exc:
-            logger.exception("Import database failed")
+            logger.error("Import database failed")
             return self.response_500(message=str(exc))
+
+    @expose("/<int:pk>/function_names/", methods=["GET"])
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
+        f".function_names",
+        log_to_statsd=False,
+    )
+    def function_names(self, pk: int) -> Response:
+        """Get function names supported by a database
+        ---
+        get:
+          description:
+            Get function names supported by a database
+          parameters:
+          - in: path
+            name: pk
+            schema:
+              type: integer
+          responses:
+            200:
+            200:
+              description: Query result
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/DatabaseFunctionNamesResponse"
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        database = DatabaseDAO.find_by_id(pk)
+        if not database:
+            return self.response_404()
+        return self.response(200, function_names=database.function_names,)

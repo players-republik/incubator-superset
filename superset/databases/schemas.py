@@ -16,16 +16,20 @@
 # under the License.
 import inspect
 import json
+import urllib.parse
+from typing import Any, Dict
 
 from flask import current_app
 from flask_babel import lazy_gettext as _
-from marshmallow import fields, Schema
+from marshmallow import fields, Schema, validates_schema
 from marshmallow.validate import Length, ValidationError
 from sqlalchemy import MetaData
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
-from superset.exceptions import CertificateException
+from superset.exceptions import CertificateException, SupersetSecurityException
+from superset.models.core import PASSWORD_MASK
+from superset.security.analytics_db_safety import check_sqlalchemy_uri
 from superset.utils.core import markdown, parse_ssl_cert
 
 database_schemas_query_schema = {
@@ -130,27 +134,21 @@ def sqlalchemy_uri_validator(value: str) -> str:
     Validate if it's a valid SQLAlchemy URI and refuse SQLLite by default
     """
     try:
-        make_url(value.strip())
+        uri = make_url(value.strip())
     except (ArgumentError, AttributeError, ValueError):
         raise ValidationError(
             [
                 _(
                     "Invalid connection string, a valid string usually follows: "
-                    "dirver://user:password@database-host/database-name"
+                    "driver://user:password@database-host/database-name"
                 )
             ]
         )
-    if current_app.config.get("PREVENT_UNSAFE_DB_CONNECTIONS", True) and value:
-        if value.startswith("sqlite"):
-            raise ValidationError(
-                [
-                    _(
-                        "SQLite database cannot be used as a data source for "
-                        "security reasons."
-                    )
-                ]
-            )
-
+    if current_app.config.get("PREVENT_UNSAFE_DB_CONNECTIONS", True):
+        try:
+            check_sqlalchemy_uri(uri)
+        except SupersetSecurityException as ex:
+            raise ValidationError([str(ex)])
     return value
 
 
@@ -410,16 +408,22 @@ class DatabaseRelatedObjectsResponse(Schema):
     dashboards = fields.Nested(DatabaseRelatedDashboards)
 
 
+class DatabaseFunctionNamesResponse(Schema):
+    function_names = fields.List(fields.String())
+
+
 class ImportV1DatabaseExtraSchema(Schema):
     metadata_params = fields.Dict(keys=fields.Str(), values=fields.Raw())
     engine_params = fields.Dict(keys=fields.Str(), values=fields.Raw())
     metadata_cache_timeout = fields.Dict(keys=fields.Str(), values=fields.Integer())
-    schemas_allowed_for_csv_upload = fields.List(fields.String)
+    schemas_allowed_for_csv_upload = fields.List(fields.String())
+    cost_estimate_enabled = fields.Boolean()
 
 
 class ImportV1DatabaseSchema(Schema):
     database_name = fields.String(required=True)
     sqlalchemy_uri = fields.String(required=True)
+    password = fields.String(allow_none=True)
     cache_timeout = fields.Integer(allow_none=True)
     expose_in_sqllab = fields.Boolean()
     allow_run_async = fields.Boolean()
@@ -429,3 +433,12 @@ class ImportV1DatabaseSchema(Schema):
     extra = fields.Nested(ImportV1DatabaseExtraSchema)
     uuid = fields.UUID(required=True)
     version = fields.String(required=True)
+
+    # pylint: disable=no-self-use, unused-argument
+    @validates_schema
+    def validate_password(self, data: Dict[str, Any], **kwargs: Any) -> None:
+        """If sqlalchemy_uri has a masked password, password is required"""
+        uri = data["sqlalchemy_uri"]
+        password = urllib.parse.urlparse(uri).password
+        if password == PASSWORD_MASK and data.get("password") is None:
+            raise ValidationError("Must provide a password for the database")

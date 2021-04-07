@@ -22,7 +22,7 @@ from tests.superset_test_custom_template_processors import CustomPrestoTemplateP
 
 AUTH_USER_REGISTRATION_ROLE = "alpha"
 SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(DATA_DIR, "unittests.db")
-DEBUG = True
+DEBUG = False
 SUPERSET_WEBSERVER_PORT = 8081
 
 # Allowing SQLALCHEMY_DATABASE_URI and SQLALCHEMY_EXAMPLES_URI to be defined as an env vars for
@@ -56,8 +56,8 @@ FEATURE_FLAGS = {
     "SHARE_QUERIES_VIA_KV_STORE": True,
     "ENABLE_TEMPLATE_PROCESSING": True,
     "ENABLE_REACT_CRUD_VIEWS": os.environ.get("ENABLE_REACT_CRUD_VIEWS", False),
-    "ROW_LEVEL_SECURITY": True,
     "ALERT_REPORTS": True,
+    "DASHBOARD_NATIVE_FILTERS": True,
 }
 
 
@@ -72,7 +72,6 @@ WTF_CSRF_ENABLED = False
 
 FAB_ROLES = {"TestRole": [["Security", "menu_access"], ["List Users", "menu_access"]]}
 
-PUBLIC_ROLE_LIKE = "Gamma"
 AUTH_ROLE_PUBLIC = "Public"
 EMAIL_NOTIFICATIONS = False
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
@@ -95,6 +94,8 @@ DATA_CACHE_CONFIG = {
     "CACHE_DEFAULT_TIMEOUT": 30,
     "CACHE_KEY_PREFIX": "superset_data_cache",
 }
+
+GLOBAL_ASYNC_QUERIES_JWT_SECRET = "test-secret-change-me-test-secret-change-me"
 
 
 class CeleryConfig(object):

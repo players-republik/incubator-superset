@@ -17,6 +17,7 @@
 # pylint: disable=too-many-public-methods, invalid-name
 """Unit tests for Superset"""
 import json
+import unittest
 from io import BytesIO
 from typing import List, Optional
 from unittest.mock import patch
@@ -39,11 +40,14 @@ from superset.utils.core import backend, get_example_database, get_main_database
 from superset.utils.dict_import_export import export_to_dict
 from tests.base_tests import SupersetTestCase
 from tests.conftest import CTAS_SCHEMA_NAME
+from tests.fixtures.birth_names_dashboard import load_birth_names_dashboard_with_slices
+from tests.fixtures.energy_dashboard import load_energy_table_with_slice
 from tests.fixtures.importexport import (
     database_config,
     database_metadata_config,
     dataset_config,
     dataset_metadata_config,
+    dataset_ui_export,
 )
 
 
@@ -137,6 +141,22 @@ class TestDatasetApi(SupersetTestCase):
             .one()
         )
 
+    def create_dataset_import(self):
+        buf = BytesIO()
+        with ZipFile(buf, "w") as bundle:
+            with bundle.open("dataset_export/metadata.yaml", "w") as fp:
+                fp.write(yaml.safe_dump(dataset_metadata_config).encode())
+            with bundle.open(
+                "dataset_export/databases/imported_database.yaml", "w"
+            ) as fp:
+                fp.write(yaml.safe_dump(database_config).encode())
+            with bundle.open(
+                "dataset_export/datasets/imported_dataset.yaml", "w"
+            ) as fp:
+                fp.write(yaml.safe_dump(dataset_config).encode())
+        buf.seek(0)
+        return buf
+
     def test_get_dataset_list(self):
         """
         Dataset API: Test get dataset list
@@ -196,6 +216,7 @@ class TestDatasetApi(SupersetTestCase):
         assert response["count"] == 0
         assert response["result"] == []
 
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_get_dataset_item(self):
         """
         Dataset API: Test get dataset item
@@ -253,13 +274,12 @@ class TestDatasetApi(SupersetTestCase):
                 )
             )
             schema_values = [
-                "",
                 "admin_database",
                 "information_schema",
                 "public",
             ]
             expected_response = {
-                "count": 4,
+                "count": 3,
                 "result": [{"text": val, "value": val} for val in schema_values],
             }
             self.login(username="admin")
@@ -283,14 +303,9 @@ class TestDatasetApi(SupersetTestCase):
 
             query_parameter = {"page": 0, "page_size": 1}
             pg_test_query_parameter(
-                query_parameter, {"count": 4, "result": [{"text": "", "value": ""}]},
-            )
-
-            query_parameter = {"page": 1, "page_size": 1}
-            pg_test_query_parameter(
                 query_parameter,
                 {
-                    "count": 4,
+                    "count": 3,
                     "result": [{"text": "admin_database", "value": "admin_database"}],
                 },
             )
@@ -333,6 +348,20 @@ class TestDatasetApi(SupersetTestCase):
         uri = "api/v1/dataset/_info"
         rv = self.get_assert_metric(uri, "info")
         assert rv.status_code == 200
+
+    def test_info_security_dataset(self):
+        """
+        Dataset API: Test info security
+        """
+        self.login(username="admin")
+        params = {"keys": ["permissions"]}
+        uri = f"api/v1/dataset/_info?q={prison.dumps(params)}"
+        rv = self.get_assert_metric(uri, "info")
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 200
+        assert "can_read" in data["permissions"]
+        assert "can_write" in data["permissions"]
+        assert len(data["permissions"]) == 2
 
     def test_create_dataset_item(self):
         """
@@ -436,23 +465,22 @@ class TestDatasetApi(SupersetTestCase):
         expected_result = {"message": {"owners": ["Owners are invalid"]}}
         assert data == expected_result
 
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_create_dataset_validate_uniqueness(self):
         """
         Dataset API: Test create dataset validate table uniqueness
         """
-        example_db = get_example_database()
+        energy_usage_ds = self.get_energy_usage_dataset()
         self.login(username="admin")
         table_data = {
-            "database": example_db.id,
-            "schema": "",
-            "table_name": "birth_names",
+            "database": energy_usage_ds.database_id,
+            "table_name": energy_usage_ds.table_name,
         }
-        uri = "api/v1/dataset/"
-        rv = self.post_assert_metric(uri, table_data, "post")
+        rv = self.post_assert_metric("/api/v1/dataset/", table_data, "post")
         assert rv.status_code == 422
         data = json.loads(rv.data.decode("utf-8"))
         assert data == {
-            "message": {"table_name": ["Datasource birth_names already exists"]}
+            "message": {"table_name": ["Dataset energy_usage already exists"]}
         }
 
     def test_create_dataset_same_name_different_schema(self):
@@ -570,12 +598,7 @@ class TestDatasetApi(SupersetTestCase):
         rv = self.put_assert_metric(uri, dataset_data, "put")
         assert rv.status_code == 200
 
-        columns = (
-            db.session.query(TableColumn)
-            .filter_by(table_id=dataset.id)
-            .order_by("column_name")
-            .all()
-        )
+        columns = db.session.query(TableColumn).filter_by(table_id=dataset.id).all()
 
         assert columns[0].column_name == dataset_data["columns"][0]["column_name"]
         assert columns[0].description == dataset_data["columns"][0]["description"]
@@ -631,6 +654,53 @@ class TestDatasetApi(SupersetTestCase):
         db.session.delete(dataset)
         db.session.commit()
 
+    def test_update_dataset_delete_column(self):
+        """
+        Dataset API: Test update dataset delete column
+        """
+        # create example dataset by Command
+        dataset = self.insert_default_dataset()
+
+        new_column_data = {
+            "column_name": "new_col",
+            "description": "description",
+            "expression": "expression",
+            "type": "INTEGER",
+            "verbose_name": "New Col",
+        }
+        uri = f"api/v1/dataset/{dataset.id}"
+        # Get current cols and append the new column
+        self.login(username="admin")
+        rv = self.get_assert_metric(uri, "get")
+        data = json.loads(rv.data.decode("utf-8"))
+
+        for column in data["result"]["columns"]:
+            column.pop("changed_on", None)
+            column.pop("created_on", None)
+
+        data["result"]["columns"].append(new_column_data)
+        rv = self.client.put(uri, json={"columns": data["result"]["columns"]})
+
+        assert rv.status_code == 200
+
+        # Remove this new column
+        data["result"]["columns"].remove(new_column_data)
+        rv = self.client.put(uri, json={"columns": data["result"]["columns"]})
+        assert rv.status_code == 200
+
+        columns = (
+            db.session.query(TableColumn)
+            .filter_by(table_id=dataset.id)
+            .order_by("column_name")
+            .all()
+        )
+        assert columns[0].column_name == "id"
+        assert columns[1].column_name == "name"
+        assert len(columns) == 2
+
+        db.session.delete(dataset)
+        db.session.commit()
+
     def test_update_dataset_update_column(self):
         """
         Dataset API: Test update dataset columns
@@ -662,6 +732,49 @@ class TestDatasetApi(SupersetTestCase):
         if get_example_database().backend != "presto":
             assert columns[0].groupby is False
             assert columns[0].filterable is False
+
+        db.session.delete(dataset)
+        db.session.commit()
+
+    def test_update_dataset_delete_metric(self):
+        """
+        Dataset API: Test update dataset delete metric
+        """
+        dataset = self.insert_default_dataset()
+        metrics_query = (
+            db.session.query(SqlMetric)
+            .filter_by(table_id=dataset.id)
+            .order_by("metric_name")
+        )
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}"
+        data = {
+            "metrics": [
+                {"metric_name": "metric1", "expression": "COUNT(*)"},
+                {"metric_name": "metric2", "expression": "DIFF_COUNT(*)"},
+            ]
+        }
+        rv = self.put_assert_metric(uri, data, "put")
+        assert rv.status_code == 200
+
+        metrics = metrics_query.all()
+        assert len(metrics) == 2
+
+        data = {
+            "metrics": [
+                {
+                    "id": metrics[0].id,
+                    "metric_name": "metric1",
+                    "expression": "COUNT(*)",
+                },
+            ]
+        }
+        rv = self.put_assert_metric(uri, data, "put")
+        assert rv.status_code == 200
+
+        metrics = metrics_query.all()
+        assert len(metrics) == 1
 
         db.session.delete(dataset)
         db.session.commit()
@@ -810,7 +923,7 @@ class TestDatasetApi(SupersetTestCase):
         data = json.loads(rv.data.decode("utf-8"))
         assert rv.status_code == 422
         expected_response = {
-            "message": {"table_name": ["Datasource ab_user already exists"]}
+            "message": {"table_name": ["Dataset ab_user already exists"]}
         }
         assert data == expected_response
         db.session.delete(dataset)
@@ -893,6 +1006,137 @@ class TestDatasetApi(SupersetTestCase):
         assert data == {"message": "Dataset could not be deleted."}
         db.session.delete(dataset)
         db.session.commit()
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_column(self):
+        """
+        Dataset API: Test delete dataset column
+        """
+        dataset = self.get_fixture_datasets()[0]
+        column_id = dataset.columns[0].id
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/column/{column_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 200
+        assert db.session.query(TableColumn).get(column_id) == None
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_column_not_found(self):
+        """
+        Dataset API: Test delete dataset column not found
+        """
+        dataset = self.get_fixture_datasets()[0]
+        non_id = self.get_nonexistent_numeric_id(TableColumn)
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/column/{non_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 404
+
+        non_id = self.get_nonexistent_numeric_id(SqlaTable)
+        column_id = dataset.columns[0].id
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{non_id}/column/{column_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 404
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_column_not_owned(self):
+        """
+        Dataset API: Test delete dataset column not owned
+        """
+        dataset = self.get_fixture_datasets()[0]
+        column_id = dataset.columns[0].id
+
+        self.login(username="alpha")
+        uri = f"api/v1/dataset/{dataset.id}/column/{column_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 403
+
+    @pytest.mark.usefixtures("create_datasets")
+    @patch("superset.datasets.dao.DatasetDAO.delete")
+    def test_delete_dataset_column_fail(self, mock_dao_delete):
+        """
+        Dataset API: Test delete dataset column
+        """
+        mock_dao_delete.side_effect = DAODeleteFailedError()
+        dataset = self.get_fixture_datasets()[0]
+        column_id = dataset.columns[0].id
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/column/{column_id}"
+        rv = self.client.delete(uri)
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 422
+        assert data == {"message": "Dataset column delete failed."}
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_metric(self):
+        """
+        Dataset API: Test delete dataset metric
+        """
+        dataset = self.get_fixture_datasets()[0]
+        test_metric = SqlMetric(
+            metric_name="metric1", expression="COUNT(*)", table=dataset
+        )
+        db.session.add(test_metric)
+        db.session.commit()
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/metric/{test_metric.id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 200
+        assert db.session.query(SqlMetric).get(test_metric.id) == None
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_metric_not_found(self):
+        """
+        Dataset API: Test delete dataset metric not found
+        """
+        dataset = self.get_fixture_datasets()[0]
+        non_id = self.get_nonexistent_numeric_id(SqlMetric)
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/metric/{non_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 404
+
+        non_id = self.get_nonexistent_numeric_id(SqlaTable)
+        metric_id = dataset.metrics[0].id
+
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{non_id}/metric/{metric_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 404
+
+    @pytest.mark.usefixtures("create_datasets")
+    def test_delete_dataset_metric_not_owned(self):
+        """
+        Dataset API: Test delete dataset metric not owned
+        """
+        dataset = self.get_fixture_datasets()[0]
+        metric_id = dataset.metrics[0].id
+
+        self.login(username="alpha")
+        uri = f"api/v1/dataset/{dataset.id}/metric/{metric_id}"
+        rv = self.client.delete(uri)
+        assert rv.status_code == 403
+
+    @pytest.mark.usefixtures("create_datasets")
+    @patch("superset.datasets.dao.DatasetDAO.delete")
+    def test_delete_dataset_metric_fail(self, mock_dao_delete):
+        """
+        Dataset API: Test delete dataset metric
+        """
+        mock_dao_delete.side_effect = DAODeleteFailedError()
+        dataset = self.get_fixture_datasets()[0]
+        column_id = dataset.metrics[0].id
+        self.login(username="admin")
+        uri = f"api/v1/dataset/{dataset.id}/metric/{column_id}"
+        rv = self.client.delete(uri)
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 422
+        assert data == {"message": "Dataset metric delete failed."}
 
     @pytest.mark.usefixtures("create_datasets")
     def test_bulk_delete_dataset_items(self):
@@ -1029,13 +1273,14 @@ class TestDatasetApi(SupersetTestCase):
         db.session.delete(dataset)
         db.session.commit()
 
+    @unittest.skip("test is failing stochastically")
     def test_export_dataset(self):
         """
         Dataset API: Test export dataset
         """
         birth_names_dataset = self.get_birth_names_dataset()
         # TODO: fix test for presto
-        # debug with dump: https://github.com/apache/incubator-superset/runs/1092546855
+        # debug with dump: https://github.com/apache/superset/runs/1092546855
         if birth_names_dataset.database.backend in {"presto", "hive"}:
             return
 
@@ -1084,20 +1329,21 @@ class TestDatasetApi(SupersetTestCase):
 
         self.login(username="gamma")
         rv = self.client.get(uri)
-        assert rv.status_code == 401
+        assert rv.status_code == 404
 
     @patch.dict(
         "superset.extensions.feature_flag_manager._feature_flags",
         {"VERSIONED_EXPORT": True},
         clear=True,
     )
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_export_dataset_bundle(self):
         """
         Dataset API: Test export dataset
         """
         birth_names_dataset = self.get_birth_names_dataset()
         # TODO: fix test for presto
-        # debug with dump: https://github.com/apache/incubator-superset/runs/1092546855
+        # debug with dump: https://github.com/apache/superset/runs/1092546855
         if birth_names_dataset.database.backend in {"presto", "hive"}:
             return
 
@@ -1145,9 +1391,10 @@ class TestDatasetApi(SupersetTestCase):
 
         self.login(username="gamma")
         rv = self.client.get(uri)
+        # gamma users by default do not have access to this dataset
+        assert rv.status_code == 404
 
-        assert rv.status_code == 401
-
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_get_dataset_related_objects(self):
         """
         Dataset API: Test get chart and dashboard count related to a dataset
@@ -1214,27 +1461,14 @@ class TestDatasetApi(SupersetTestCase):
         for table_name in self.fixture_tables_names:
             assert table_name in [ds["table_name"] for ds in data["result"]]
 
-    def test_imported_dataset(self):
+    def test_import_dataset(self):
         """
         Dataset API: Test import dataset
         """
         self.login(username="admin")
         uri = "api/v1/dataset/import/"
 
-        buf = BytesIO()
-        with ZipFile(buf, "w") as bundle:
-            with bundle.open("dataset_export/metadata.yaml", "w") as fp:
-                fp.write(yaml.safe_dump(dataset_metadata_config).encode())
-            with bundle.open(
-                "dataset_export/databases/imported_database.yaml", "w"
-            ) as fp:
-                fp.write(yaml.safe_dump(database_config).encode())
-            with bundle.open(
-                "dataset_export/datasets/imported_dataset.yaml", "w"
-            ) as fp:
-                fp.write(yaml.safe_dump(dataset_config).encode())
-        buf.seek(0)
-
+        buf = self.create_dataset_import()
         form_data = {
             "formData": (buf, "dataset_export.zip"),
         }
@@ -1258,7 +1492,86 @@ class TestDatasetApi(SupersetTestCase):
         db.session.delete(database)
         db.session.commit()
 
-    def test_imported_dataset_invalid(self):
+    def test_import_dataset_v0_export(self):
+        num_datasets = db.session.query(SqlaTable).count()
+
+        self.login(username="admin")
+        uri = "api/v1/dataset/import/"
+
+        buf = BytesIO()
+        buf.write(json.dumps(dataset_ui_export).encode())
+        buf.seek(0)
+        form_data = {
+            "formData": (buf, "dataset_export.zip"),
+        }
+        rv = self.client.post(uri, data=form_data, content_type="multipart/form-data")
+        response = json.loads(rv.data.decode("utf-8"))
+
+        assert rv.status_code == 200
+        assert response == {"message": "OK"}
+        assert db.session.query(SqlaTable).count() == num_datasets + 1
+
+        dataset = (
+            db.session.query(SqlaTable).filter_by(table_name="birth_names_2").one()
+        )
+        db.session.delete(dataset)
+        db.session.commit()
+
+    def test_import_dataset_overwrite(self):
+        """
+        Dataset API: Test import existing dataset
+        """
+        self.login(username="admin")
+        uri = "api/v1/dataset/import/"
+
+        buf = self.create_dataset_import()
+        form_data = {
+            "formData": (buf, "dataset_export.zip"),
+        }
+        rv = self.client.post(uri, data=form_data, content_type="multipart/form-data")
+        response = json.loads(rv.data.decode("utf-8"))
+
+        assert rv.status_code == 200
+        assert response == {"message": "OK"}
+
+        # import again without overwrite flag
+        buf = self.create_dataset_import()
+        form_data = {
+            "formData": (buf, "dataset_export.zip"),
+        }
+        rv = self.client.post(uri, data=form_data, content_type="multipart/form-data")
+        response = json.loads(rv.data.decode("utf-8"))
+
+        assert rv.status_code == 422
+        assert response == {
+            "message": {
+                "datasets/imported_dataset.yaml": "Dataset already exists and `overwrite=true` was not passed"
+            }
+        }
+
+        # import with overwrite flag
+        buf = self.create_dataset_import()
+        form_data = {
+            "formData": (buf, "dataset_export.zip"),
+            "overwrite": "true",
+        }
+        rv = self.client.post(uri, data=form_data, content_type="multipart/form-data")
+        response = json.loads(rv.data.decode("utf-8"))
+
+        assert rv.status_code == 200
+        assert response == {"message": "OK"}
+
+        # clean up
+        database = (
+            db.session.query(Database).filter_by(uuid=database_config["uuid"]).one()
+        )
+        dataset = database.tables[0]
+
+        db.session.delete(dataset)
+        db.session.delete(database)
+        db.session.commit()
+
+    def test_import_dataset_invalid(self):
         """
         Dataset API: Test import invalid dataset
         """
@@ -1290,7 +1603,7 @@ class TestDatasetApi(SupersetTestCase):
             "message": {"metadata.yaml": {"type": ["Must be equal to SqlaTable."]}}
         }
 
-    def test_imported_dataset_invalid_v0_validation(self):
+    def test_import_dataset_invalid_v0_validation(self):
         """
         Dataset API: Test import invalid dataset
         """

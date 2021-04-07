@@ -24,14 +24,16 @@ import {
   useFavoriteStatus,
 } from 'src/views/CRUD/hooks';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
+import { useHistory } from 'react-router-dom';
 import PropertiesModal from 'src/explore/components/PropertiesModal';
 import { User } from 'src/types/bootstrapTypes';
-import Icon from 'src/components/Icon';
 import ChartCard from 'src/views/CRUD/chart/ChartCard';
 import Chart from 'src/types/Chart';
+import Loading from 'src/components/Loading';
+import ErrorBoundary from 'src/components/ErrorBoundary';
 import SubMenu from 'src/components/Menu/SubMenu';
 import EmptyState from './EmptyState';
-import { CardContainer, IconContainer } from '../utils';
+import { CardContainer } from '../utils';
 
 const PAGE_SIZE = 3;
 
@@ -42,6 +44,8 @@ interface ChartTableProps {
   chartFilter?: string;
   user?: User;
   mine: Array<any>;
+  showThumbnails: boolean;
+  featureFlag: boolean;
 }
 
 function ChartTable({
@@ -49,9 +53,12 @@ function ChartTable({
   addDangerToast,
   addSuccessToast,
   mine,
+  showThumbnails,
+  featureFlag,
 }: ChartTableProps) {
+  const history = useHistory();
   const {
-    state: { resourceCollection: charts, bulkSelectEnabled },
+    state: { loading, resourceCollection: charts, bulkSelectEnabled },
     setResourceCollection: setCharts,
     hasPerm,
     refreshData,
@@ -62,7 +69,10 @@ function ChartTable({
     addDangerToast,
     true,
     mine,
+    [],
+    false,
   );
+
   const chartIds = useMemo(() => charts.map(c => c.id), [charts]);
   const [saveFavoriteStatus, favoriteStatus] = useFavoriteStatus(
     'chart',
@@ -90,15 +100,15 @@ function ChartTable({
     } else {
       filters.push({
         id: 'id',
-        operator: 'chart_is_fav',
+        operator: 'chart_is_favorite',
         value: true,
       });
     }
     return filters;
   };
 
-  const getData = (filter: string) => {
-    return fetchData({
+  const getData = (filter: string) =>
+    fetchData({
       pageIndex: 0,
       pageSize: PAGE_SIZE,
       sortBy: [
@@ -109,10 +119,10 @@ function ChartTable({
       ],
       filters: getFilters(filter),
     });
-  };
 
+  if (loading) return <Loading position="inline" />;
   return (
-    <>
+    <ErrorBoundary>
       {sliceCurrentlyEditing && (
         <PropertiesModal
           onHide={closeChartEditModal}
@@ -141,21 +151,25 @@ function ChartTable({
         buttons={[
           {
             name: (
-              <IconContainer>
-                <Icon name="plus-small" />
+              <>
+                <i className="fa fa-plus" />
                 {t('Chart')}
-              </IconContainer>
+              </>
             ),
             buttonStyle: 'tertiary',
             onClick: () => {
-              window.location.href = '/chart/add';
+              window.location.assign('/chart/add');
             },
           },
           {
             name: 'View All »',
             buttonStyle: 'link',
             onClick: () => {
-              window.location.href = '/chart/list';
+              const target =
+                chartFilter === 'Favorite'
+                  ? '/chart/list/?filters=(favorite:!t)'
+                  : '/chart/list/';
+              history.push(target);
             },
           },
         ]}
@@ -170,7 +184,9 @@ function ChartTable({
               chart={e}
               userId={user?.userId}
               hasPerm={hasPerm}
+              showThumbnails={showThumbnails}
               bulkSelectEnabled={bulkSelectEnabled}
+              featureFlag={featureFlag}
               refreshData={refreshData}
               addDangerToast={addDangerToast}
               addSuccessToast={addSuccessToast}
@@ -182,7 +198,7 @@ function ChartTable({
       ) : (
         <EmptyState tableName="CHARTS" tab={chartFilter} />
       )}
-    </>
+    </ErrorBoundary>
   );
 }
 

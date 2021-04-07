@@ -18,8 +18,9 @@
  */
 import React, { ReactNode } from 'react';
 import shortid from 'shortid';
-import { t } from '@superset-ui/core';
+import { t, styled } from '@superset-ui/core';
 import Button from 'src/components/Button';
+import Icons from 'src/components/Icons';
 import Fieldset from './Fieldset';
 import { recurseReactClone } from './utils';
 import './crud.less';
@@ -41,6 +42,7 @@ interface CRUDCollectionProps {
   ) => ReactNode)[];
   onChange?: (arg0: any) => void;
   tableColumns: Array<any>;
+  stickyHeader?: boolean;
 }
 
 interface CRUDCollectionState {
@@ -59,6 +61,27 @@ function createKeyedCollection(arr: Array<object>) {
   });
   return map;
 }
+
+const CrudTableWrapper = styled.div<{ stickyHeader?: boolean }>`
+  ${({ stickyHeader }) =>
+    stickyHeader &&
+    `
+      height: 350px;
+      overflow: auto;
+
+      thead th {
+        background: #fff;
+        position: sticky;
+        top: 0;
+        z-index: 9;
+      }
+    `}
+`;
+
+const CrudButtonWrapper = styled.div`
+  text-align: right;
+  ${({ theme }) => `margin-bottom: ${theme.gridUnit * 2}px`}
+`;
 
 export default class CRUDCollection extends React.PureComponent<
   CRUDCollectionProps,
@@ -229,13 +252,18 @@ export default class CRUDCollection extends React.PureComponent<
     }
     if (allowDeletes) {
       tds.push(
-        <td key="__actions" data-test="crud-delete-option">
-          <i
-            {...{ 'data-test': 'crud-delete-icon' }}
-            role="button"
+        <td
+          key="__actions"
+          data-test="crud-delete-option"
+          className="text-primary"
+        >
+          <Icons.Trash
             aria-label="Delete item"
+            className="pointer"
+            data-test="crud-delete-icon"
+            iconSize="m"
+            role="button"
             tabIndex={0}
-            className="fa fa-trash text-primary pointer"
             onClick={this.deleteItem.bind(this, record.id)}
           />
         </td>,
@@ -281,25 +309,32 @@ export default class CRUDCollection extends React.PureComponent<
 
   render() {
     return (
-      <div className="CRUD">
-        <span className="float-right m-t-10 m-r-10">
+      <>
+        <CrudButtonWrapper>
           {this.props.allowAddItem && (
-            <Button
-              buttonSize="sm"
-              buttonStyle="primary"
-              onClick={this.onAddItem}
-              data-test="add-item-button"
-            >
-              <i data-test="crud-add-table-item" className="fa fa-plus" />{' '}
-              {t('Add Item')}
-            </Button>
+            <span className="m-t-10 m-r-10">
+              <Button
+                buttonSize="small"
+                buttonStyle="primary"
+                onClick={this.onAddItem}
+                data-test="add-item-button"
+              >
+                <i data-test="crud-add-table-item" className="fa fa-plus" />{' '}
+                {t('Add item')}
+              </Button>
+            </span>
           )}
-        </span>
-        <table data-test="crud-table" className="table">
-          {this.renderHeaderRow()}
-          {this.renderTableBody()}
-        </table>
-      </div>
+        </CrudButtonWrapper>
+        <CrudTableWrapper
+          className="CRUD"
+          stickyHeader={this.props.stickyHeader}
+        >
+          <table data-test="crud-table" className="table">
+            {this.renderHeaderRow()}
+            {this.renderTableBody()}
+          </table>
+        </CrudTableWrapper>
+      </>
     );
   }
 }

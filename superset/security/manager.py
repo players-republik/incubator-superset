@@ -27,6 +27,8 @@ from flask_appbuilder.security.sqla.models import (
     assoc_permissionview_role,
     assoc_user_role,
     PermissionView,
+    Role,
+    User,
 )
 from flask_appbuilder.security.views import (
     PermissionModelView,
@@ -38,6 +40,7 @@ from flask_appbuilder.security.views import (
 from flask_appbuilder.widgets import ListWidget
 from sqlalchemy import and_, or_
 from sqlalchemy.engine.base import Connection
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.mapper import Mapper
 from sqlalchemy.orm.query import Query as SqlaQuery
 
@@ -52,10 +55,12 @@ if TYPE_CHECKING:
     from superset.common.query_context import QueryContext
     from superset.connectors.base.models import BaseDatasource
     from superset.connectors.druid.models import DruidCluster
+    from superset.models.dashboard import Dashboard
     from superset.models.core import Database
     from superset.models.sql_lab import Query
     from superset.sql_parse import Table
     from superset.viz import BaseViz
+
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +112,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
     SecurityManager
 ):
     userstatschartview = None
-    READ_ONLY_MODEL_VIEWS = {"DatabaseAsync", "DatabaseView", "DruidClusterModelView"}
+    READ_ONLY_MODEL_VIEWS = {"Database", "DruidClusterModelView", "DynamicPlugin"}
 
     USER_MODEL_VIEWS = {
         "UserDBModelView",
@@ -118,9 +123,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
     }
 
     GAMMA_READ_ONLY_MODEL_VIEWS = {
-        "SqlMetricInlineView",
-        "TableColumnInlineView",
-        "TableModelView",
+        "Dataset",
         "DruidColumnInlineView",
         "DruidDatasourceModelView",
         "DruidMetricInlineView",
@@ -133,7 +136,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         "Refresh Druid Metadata",
         "ResetPasswordView",
         "RoleModelView",
-        "LogModelView",
+        "Log",
         "Security",
         "Row Level Security",
         "Row Level Security Filters",
@@ -158,7 +161,13 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         "all_query_access",
     }
 
-    READ_ONLY_PERMISSION = {"can_show", "can_list", "can_get", "can_external_metadata"}
+    READ_ONLY_PERMISSION = {
+        "can_show",
+        "can_list",
+        "can_get",
+        "can_external_metadata",
+        "can_read",
+    }
 
     ALPHA_ONLY_PERMISSIONS = {
         "muldelete",
@@ -173,7 +182,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         "metric_access",
     }
 
-    ACCESSIBLE_PERMS = {"can_userinfo"}
+    ACCESSIBLE_PERMS = {"can_userinfo", "resetmypassword"}
 
     data_access_permissions = (
         "database_access",
@@ -621,7 +630,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         if conf.get("PUBLIC_ROLE_LIKE_GAMMA", False):
             logger.warning(
                 "The config `PUBLIC_ROLE_LIKE_GAMMA` is deprecated and will be removed "
-                "in Superset 1.0. Please use `PUBLIC_ROLE_LIKE ` instead."
+                "in Superset 1.0. Please use `PUBLIC_ROLE_LIKE` instead."
             )
             self.copy_role("Gamma", self.auth_role_public, merge=True)
 
@@ -649,6 +658,13 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     if pvm not in role_from_permissions:
                         role_from_permissions.append(pvm)
         return role_from_permissions
+
+    def find_roles_by_id(self, role_ids: List[int]) -> List[Role]:
+        """
+        Find a List of models by a list of ids, if defined applies `base_filter`
+        """
+        query = self.get_session.query(Role).filter(Role.id.in_(role_ids))
+        return query.all()
 
     def copy_role(
         self, role_from_name: str, role_to_name: str, merge: bool = True
@@ -704,7 +720,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         self.get_session.merge(role)
         self.get_session.commit()
 
-    def _is_admin_only(self, pvm: Model) -> bool:
+    def _is_admin_only(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is accessible to only Admin users,
         False otherwise.
@@ -725,7 +741,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             or pvm.permission.name in self.ADMIN_ONLY_PERMISSIONS
         )
 
-    def _is_alpha_only(self, pvm: PermissionModelView) -> bool:
+    def _is_alpha_only(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is accessible to only Alpha users,
         False otherwise.
@@ -744,7 +760,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             or pvm.permission.name in self.ALPHA_ONLY_PERMISSIONS
         )
 
-    def _is_accessible_to_all(self, pvm: PermissionModelView) -> bool:
+    def _is_accessible_to_all(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is accessible to all, False
         otherwise.
@@ -755,7 +771,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
 
         return pvm.permission.name in self.ACCESSIBLE_PERMS
 
-    def _is_admin_pvm(self, pvm: PermissionModelView) -> bool:
+    def _is_admin_pvm(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is Admin user related, False
         otherwise.
@@ -766,7 +782,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
 
         return not self._is_user_defined_permission(pvm)
 
-    def _is_alpha_pvm(self, pvm: PermissionModelView) -> bool:
+    def _is_alpha_pvm(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is Alpha user related, False
         otherwise.
@@ -779,7 +795,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             self._is_user_defined_permission(pvm) or self._is_admin_only(pvm)
         ) or self._is_accessible_to_all(pvm)
 
-    def _is_gamma_pvm(self, pvm: PermissionModelView) -> bool:
+    def _is_gamma_pvm(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is Gamma user related, False
         otherwise.
@@ -794,7 +810,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             or self._is_alpha_only(pvm)
         ) or self._is_accessible_to_all(pvm)
 
-    def _is_sql_lab_pvm(self, pvm: PermissionModelView) -> bool:
+    def _is_sql_lab_pvm(self, pvm: PermissionView) -> bool:
         """
         Return True if the FAB permission/view is SQL Lab related, False
         otherwise.
@@ -822,7 +838,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         )
 
     def _is_granter_pvm(  # pylint: disable=no-self-use
-        self, pvm: PermissionModelView
+        self, pvm: PermissionView
     ) -> bool:
         """
         Return True if the user can grant the FAB permission/view, False
@@ -986,6 +1002,21 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     self.get_datasource_access_error_object(datasource)
                 )
 
+    def get_user_by_username(
+        self, username: str, session: Session = None
+    ) -> Optional[User]:
+        """
+        Retrieves a user by it's username case sensitive. Optional session parameter
+        utility method normally useful for celery tasks where the session
+        need to be scoped
+        """
+        session = session or self.get_session
+        return (
+            session.query(self.user_model)
+            .filter(self.user_model.username == username)
+            .one_or_none()
+        )
+
     def get_rls_filters(self, table: "BaseDatasource") -> List[SqlaQuery]:
         """
         Retrieves the appropriate row level security filters for the current user and
@@ -1067,3 +1098,30 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         ids = [f.id for f in self.get_rls_filters(table)]
         ids.sort()  # Combinations rather than permutations
         return ids
+
+    # pylint: disable=no-self-use
+    def raise_for_dashboard_access(self, dashboard: "Dashboard") -> None:
+        """
+        Raise an exception if the user cannot access the dashboard.
+
+        :param dashboard: Dashboard the user wants access to
+        :raises DashboardAccessDeniedError: If the user cannot access the resource
+        """
+        from superset.dashboards.commands.exceptions import DashboardAccessDeniedError
+        from superset.views.base import get_user_roles, is_user_admin
+        from superset.views.utils import is_owner
+        from superset import is_feature_enabled
+
+        if is_feature_enabled("DASHBOARD_RBAC"):
+            has_rbac_access = any(
+                dashboard_role.id in [user_role.id for user_role in get_user_roles()]
+                for dashboard_role in dashboard.roles
+            )
+            can_access = (
+                is_user_admin()
+                or is_owner(dashboard, g.user)
+                or (dashboard.published and has_rbac_access)
+            )
+
+            if not can_access:
+                raise DashboardAccessDeniedError()

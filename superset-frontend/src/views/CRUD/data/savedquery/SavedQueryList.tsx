@@ -26,7 +26,7 @@ import {
   createFetchDistinct,
   createErrorHandler,
 } from 'src/views/CRUD/utils';
-import { Popover } from 'src/common/components';
+import Popover from 'src/components/Popover';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
 import { useListViewResource } from 'src/views/CRUD/hooks';
 import ConfirmStatusChange from 'src/components/ConfirmStatusChange';
@@ -37,7 +37,6 @@ import SubMenu, {
 import ListView, { ListViewProps, Filters } from 'src/components/ListView';
 import DeleteModal from 'src/components/DeleteModal';
 import ActionsBar, { ActionProps } from 'src/components/ListView/ActionsBar';
-import { IconName } from 'src/components/Icon';
 import { commonMenuData } from 'src/views/CRUD/data/common';
 import { SavedQueryObject } from 'src/views/CRUD/types';
 import copyTextToClipboard from 'src/utils/copy';
@@ -84,7 +83,7 @@ function SavedQueryList({
     refreshData,
   } = useListViewResource<SavedQueryObject>(
     'saved_query',
-    t('Saved Queries'),
+    t('Saved queries'),
     addDangerToast,
   );
   const [
@@ -122,7 +121,7 @@ function SavedQueryList({
   );
 
   const menuData: SubMenuProps = {
-    activeChild: 'Saved Queries',
+    activeChild: 'Saved queries',
     ...commonMenuData,
   };
 
@@ -130,7 +129,7 @@ function SavedQueryList({
 
   if (canDelete) {
     subMenuButtons.push({
-      name: t('Bulk Select'),
+      name: t('Bulk select'),
       onClick: toggleBulkSelect,
       buttonStyle: 'secondary',
     });
@@ -282,7 +281,7 @@ function SavedQueryList({
 
           return moment(utc).fromNow();
         },
-        Header: t('Created On'),
+        Header: t('Created on'),
         accessor: 'created_on',
         size: 'xl',
       },
@@ -314,7 +313,7 @@ function SavedQueryList({
               label: 'preview-action',
               tooltip: t('Query preview'),
               placement: 'bottom',
-              icon: 'binoculars' as IconName,
+              icon: 'Binoculars',
               onClick: handlePreview,
             },
             canEdit
@@ -322,7 +321,7 @@ function SavedQueryList({
                   label: 'edit-action',
                   tooltip: t('Edit query'),
                   placement: 'bottom',
-                  icon: 'edit' as IconName,
+                  icon: 'Edit',
                   onClick: handleEdit,
                 }
               : null,
@@ -330,7 +329,7 @@ function SavedQueryList({
               label: 'copy-action',
               tooltip: t('Copy query URL'),
               placement: 'bottom',
-              icon: 'copy' as IconName,
+              icon: 'Copy',
               onClick: handleCopy,
             },
             canDelete
@@ -338,7 +337,7 @@ function SavedQueryList({
                   label: 'delete-action',
                   tooltip: t('Delete query'),
                   placement: 'bottom',
-                  icon: 'trash' as IconName,
+                  icon: 'Trash',
                   onClick: handleDelete,
                 }
               : null,

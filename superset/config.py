@@ -28,7 +28,7 @@ import os
 import sys
 from collections import OrderedDict
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING, Union
 
 from cachelib.base import BaseCache
 from celery.schedules import crontab
@@ -114,6 +114,9 @@ VERSION_STRING = _try_json_readversion(VERSION_INFO_FILE) or _try_json_readversi
 VERSION_SHA_LENGTH = 8
 VERSION_SHA = _try_json_readsha(VERSION_INFO_FILE, VERSION_SHA_LENGTH)
 
+# default viz used in chart explorer
+DEFAULT_VIZ_TYPE = "table"
+
 ROW_LIMIT = 50000
 VIZ_ROW_LIMIT = 10000
 # max rows retreieved when requesting samples from datasource in explore view
@@ -198,7 +201,7 @@ APP_ICON = "/static/assets/images/superset-logo-horiz.png"
 APP_ICON_WIDTH = 126
 
 # Uncomment to specify where clicking the logo would take the user
-# e.g. setting it to '/welcome' would take the user to '/superset/welcome'
+# e.g. setting it to '/' would take the user to '/superset/welcome/'
 LOGO_TARGET_PATH = None
 
 # Enables SWAGGER UI for superset openapi spec
@@ -305,21 +308,31 @@ DEFAULT_FEATURE_FLAGS: Dict[str, bool] = {
     # Experimental feature introducing a client (browser) cache
     "CLIENT_CACHE": False,
     "DISABLE_DATASET_SOURCE_EDIT": False,
+    "DYNAMIC_PLUGINS": False,
+    # For some security concerns, you may need to enforce CSRF protection on
+    # all query request to explore_json endpoint. In Superset, we use
+    # `flask-csrf <https://sjl.bitbucket.io/flask-csrf/>`_ add csrf protection
+    # for all POST requests, but this protection doesn't apply to GET method.
+    # When ENABLE_EXPLORE_JSON_CSRF_PROTECTION is set to true, your users cannot
+    # make GET request to explore_json. explore_json accepts both GET and POST request.
+    # See `PR 7935 <https://github.com/apache/superset/pull/7935>`_ for more details.
     "ENABLE_EXPLORE_JSON_CSRF_PROTECTION": False,
     "ENABLE_TEMPLATE_PROCESSING": False,
     "KV_STORE": False,
+    # When this feature is enabled, nested types in Presto will be
+    # expanded into extra columns and/or arrays. This is experimental,
+    # and doesn't work with all nested types.
     "PRESTO_EXPAND_DATA": False,
     # Exposes API endpoint to compute thumbnails
     "THUMBNAILS": False,
     "DASHBOARD_CACHE": False,
     "REMOVE_SLICE_LEVEL_LABEL_COLORS": False,
     "SHARE_QUERIES_VIA_KV_STORE": False,
-    "SIP_38_VIZ_REARCHITECTURE": False,
     "TAGGING_SYSTEM": False,
     "SQLLAB_BACKEND_PERSISTENCE": False,
     "LISTVIEWS_DEFAULT_CARD_VIEW": False,
     # Enables the replacement React views for all the FAB views (list, edit, show) with
-    # designs introduced in https://github.com/apache/incubator-superset/issues/8976
+    # designs introduced in https://github.com/apache/superset/issues/8976
     # (SIP-34). This is a work in progress so not all features available in FAB have
     # been implemented.
     "ENABLE_REACT_CRUD_VIEWS": True,
@@ -327,6 +340,10 @@ DEFAULT_FEATURE_FLAGS: Dict[str, bool] = {
     "DISPLAY_MARKDOWN_HTML": True,
     # When True, this escapes HTML (rather than rendering it) in Markdown components
     "ESCAPE_MARKDOWN_HTML": False,
+    "DASHBOARD_NATIVE_FILTERS": False,
+    "DASHBOARD_CROSS_FILTERS": False,
+    "DASHBOARD_NATIVE_FILTERS_SET": False,
+    "GLOBAL_ASYNC_QUERIES": False,
     "VERSIONED_EXPORT": False,
     # Note that: RowLevelSecurityFilter is only given by default to the Admin role
     # and the Admin Role does have the all_datasources security permission.
@@ -335,10 +352,20 @@ DEFAULT_FEATURE_FLAGS: Dict[str, bool] = {
     # by that custom datasource access. So we are assuming a default security config,
     # a custom security config could potentially give access to setting filters on
     # tables that users do not have access to.
-    "ROW_LEVEL_SECURITY": False,
+    "ROW_LEVEL_SECURITY": True,
     # Enables Alerts and reports new implementation
     "ALERT_REPORTS": False,
-    "SIP_34_ALERTS_UI": False,
+    # Enable experimental feature to search for other dashboards
+    "OMNIBAR": False,
+    "DASHBOARD_RBAC": False,
+    "ENABLE_EXPLORE_DRAG_AND_DROP": False,
+    # Enabling ALERTS_ATTACH_REPORTS, the system sends email and slack message
+    # with screenshot and link
+    # Disables ALERTS_ATTACH_REPORTS, the system DOES NOT generate screenshot
+    # for report with type 'alert' and sends email and slack message with only link;
+    # for report with type 'report' still send with email and slack message with
+    # screenshot and link
+    "ALERTS_ATTACH_REPORTS": True,
 }
 
 # Set the default view to card/grid view if thumbnail support is enabled.
@@ -366,10 +393,60 @@ FEATURE_FLAGS: Dict[str, bool] = {}
 #     return feature_flags_dict
 GET_FEATURE_FLAGS_FUNC: Optional[Callable[[Dict[str, bool]], Dict[str, bool]]] = None
 
+# EXTRA_CATEGORICAL_COLOR_SCHEMES is used for adding custom categorical color schemes
+# example code for "My custom warm to hot" color scheme
+# EXTRA_CATEGORICAL_COLOR_SCHEMES = [
+#     {
+#         "id": 'myVisualizationColors',
+#         "description": '',
+#         "label": 'My Visualization Colors',
+#         "colors":
+#          ['#006699', '#009DD9', '#5AAA46', '#44AAAA', '#DDAA77', '#7799BB', '#88AA77',
+#          '#552288', '#5AAA46', '#CC7788', '#EEDD55', '#9977BB', '#BBAA44', '#DDCCDD']
+#     }]
+
+# This is merely a default
+EXTRA_CATEGORICAL_COLOR_SCHEMES: List[Dict[str, Any]] = []
+
+# THEME_OVERRIDES is used for adding custom theme to superset
+# example code for "My theme" custom scheme
+# THEME_OVERRIDES = {
+#   "borderRadius": 4,
+#   "colors": {
+#     "primary": {
+#       "base": 'red',
+#     },
+#     "secondary": {
+#       "base": 'green',
+#     },
+#     "grayscale": {
+#       "base": 'orange',
+#     }
+#   }
+# }
+
+THEME_OVERRIDES: Dict[str, Any] = {}
+
+# EXTRA_SEQUENTIAL_COLOR_SCHEMES is used for adding custom sequential color schemes
+# EXTRA_SEQUENTIAL_COLOR_SCHEMES =  [
+#     {
+#         "id": 'warmToHot',
+#         "description": '',
+#         "isDiverging": True,
+#         "label": 'My custom warm to hot',
+#         "colors":
+#          ['#552288', '#5AAA46', '#CC7788', '#EEDD55', '#9977BB', '#BBAA44', '#DDCCDD',
+#          '#006699', '#009DD9', '#5AAA46', '#44AAAA', '#DDAA77', '#7799BB', '#88AA77']
+#     }]
+
+# This is merely a default
+EXTRA_SEQUENTIAL_COLOR_SCHEMES: List[Dict[str, Any]] = []
+
 # ---------------------------------------------------
 # Thumbnail config (behind feature flag)
+# Also used by Alerts & Reports
 # ---------------------------------------------------
-THUMBNAIL_SELENIUM_USER = "Admin"
+THUMBNAIL_SELENIUM_USER = "admin"
 THUMBNAIL_CACHE_CONFIG: CacheConfig = {
     "CACHE_TYPE": "null",
     "CACHE_NO_NULL_WARNING": True,
@@ -405,6 +482,9 @@ CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "null"}
 
 # Cache for datasource metadata and query results
 DATA_CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "null"}
+
+# store cache keys by datasource UID (via CacheKey) for custom processing/invalidation
+STORE_CACHE_KEYS_IN_METADATA_DB = False
 
 # CORS Options
 ENABLE_CORS = False
@@ -540,6 +620,7 @@ MAX_TABLE_NAMES = 3000
 SQLLAB_SAVE_WARNING_MESSAGE = None
 SQLLAB_SCHEDULE_WARNING_MESSAGE = None
 
+
 # Default celery config is to use SQLA as a broker, in a production setting
 # you'll want to use a proper broker as specified here:
 # http://docs.celeryproject.org/en/latest/getting-started/brokers/index.html
@@ -565,7 +646,15 @@ class CeleryConfig:  # pylint: disable=too-few-public-methods
         "email_reports.schedule_hourly": {
             "task": "email_reports.schedule_hourly",
             "schedule": crontab(minute=1, hour="*"),
-        }
+        },
+        "reports.scheduler": {
+            "task": "reports.scheduler",
+            "schedule": crontab(minute="*", hour="*"),
+        },
+        "reports.prune_log": {
+            "task": "reports.prune_log",
+            "schedule": crontab(minute=0, hour=0),
+        },
     }
 
 
@@ -605,6 +694,37 @@ SQLLAB_ASYNC_TIME_LIMIT_SEC = 60 * 60 * 6
 # query costs before they run. These EXPLAIN queries should have a small
 # timeout.
 SQLLAB_QUERY_COST_ESTIMATE_TIMEOUT = 10  # seconds
+# The feature is off by default, and currently only supported in Presto and Postgres.
+# It also need to be enabled on a per-database basis, by adding the key/value pair
+# `cost_estimate_enabled: true` to the database `extra` attribute.
+ESTIMATE_QUERY_COST = False
+# The cost returned by the databases is a relative value; in order to map the cost to
+# a tangible value you need to define a custom formatter that takes into consideration
+# your specific infrastructure. For example, you could analyze queries a posteriori by
+# running EXPLAIN on them, and compute a histogram of relative costs to present the
+# cost as a percentile:
+#
+# def postgres_query_cost_formatter(
+#     result: List[Dict[str, Any]]
+# ) -> List[Dict[str, str]]:
+#     # 25, 50, 75% percentiles
+#     percentile_costs = [100.0, 1000.0, 10000.0]
+#
+#     out = []
+#     for row in result:
+#         relative_cost = row["Total cost"]
+#         percentile = bisect.bisect_left(percentile_costs, relative_cost) + 1
+#         out.append({
+#             "Relative cost": relative_cost,
+#             "Percentile": str(percentile * 25) + "%",
+#         })
+#
+#     return out
+#
+# DEFAULT_FEATURE_FLAGS = {
+#     "ESTIMATE_QUERY_COST": True,
+#     "QUERY_COST_FORMATTERS_BY_ENGINE": {"postgresql": postgres_query_cost_formatter},
+# }
 
 # Flag that controls if limit should be enforced on the CTA (create table as queries).
 SQLLAB_CTAS_NO_LIMIT = False
@@ -765,7 +885,7 @@ ENABLE_JAVASCRIPT_CONTROLS = False
 # The id of a template dashboard that should be copied to every new user
 DASHBOARD_TEMPLATE_ID = None
 
-# A callable that allows altering the database conneciton URL and params
+# A callable that allows altering the database connection URL and params
 # on the fly, at runtime. This allows for things like impersonation or
 # arbitrary logic. For instance you can wire different users to
 # use different connection parameters, or pass their email address as the
@@ -786,26 +906,41 @@ DB_CONNECTION_MUTATOR = None
 # The use case is can be around adding some sort of comment header
 # with information such as the username and worker node information
 #
-#    def SQL_QUERY_MUTATOR(sql, username, security_manager):
+#    def SQL_QUERY_MUTATOR(sql, user_name, security_manager, database):
 #        dttm = datetime.now().isoformat()
 #        return f"-- [SQL LAB] {username} {dttm}\n{sql}"
 SQL_QUERY_MUTATOR = None
 
 # Enable / disable scheduled email reports
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 ENABLE_SCHEDULED_EMAIL_REPORTS = False
 
 # Enable / disable Alerts, where users can define custom SQL that
 # will send emails with screenshots of charts or dashboards periodically
 # if it meets the criteria
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 ENABLE_ALERTS = False
 
-# Slack API token for the superset reports
-SLACK_API_TOKEN = None
+# ---------------------------------------------------
+# Alerts & Reports
+# ---------------------------------------------------
+# Used for Alerts/Reports (Feature flask ALERT_REPORTS) to set the size for the
+# sliding cron window size, should be synced with the celery beat config minus 1 second
+ALERT_REPORTS_CRON_WINDOW_SIZE = 59
+# A custom prefix to use on all Alerts & Reports emails
+EMAIL_REPORTS_SUBJECT_PREFIX = "[Report] "
+
+# Slack API token for the superset reports, either string or callable
+SLACK_API_TOKEN: Optional[Union[Callable[[], str], str]] = None
 SLACK_PROXY = None
 
-# If enabled, certail features are run in debug mode
+# If enabled, certain features are run in debug mode
 # Current list:
 # * Emails are sent using dry-run mode (logging only)
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 SCHEDULED_EMAIL_DEBUG_MODE = False
 
 # This auth provider is used by background (offline) tasks that need to access
@@ -814,26 +949,29 @@ SCHEDULED_EMAIL_DEBUG_MODE = False
 MACHINE_AUTH_PROVIDER_CLASS = "superset.utils.machine_auth.MachineAuthProvider"
 
 # Email reports - minimum time resolution (in minutes) for the crontab
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 EMAIL_REPORTS_CRON_RESOLUTION = 15
 
 # The MAX duration (in seconds) a email schedule can run for before being killed
 # by celery.
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 EMAIL_ASYNC_TIME_LIMIT_SEC = 300
-
-# Email report configuration
-# From address in emails
-EMAIL_REPORT_FROM_ADDRESS = "reports@superset.org"
 
 # Send bcc of all reports to this address. Set to None to disable.
 # This is useful for maintaining an audit trail of all email deliveries.
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 EMAIL_REPORT_BCC_ADDRESS = None
 
 # User credentials to use for generating reports
 # This user should have permissions to browse all the dashboards and
 # slices.
 # TODO: In the future, login as the owner of the item to generate reports
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
 EMAIL_REPORTS_USER = "admin"
-EMAIL_REPORTS_SUBJECT_PREFIX = "[Report] "
 
 # The webdriver to use for generating reports. Use one of the following
 # firefox
@@ -957,6 +1095,11 @@ SIP_15_TOAST_MESSAGE = (
     'class="alert-link">here</a>.'
 )
 
+# Turn this key to False to disable ownership check on the old dataset MVC and
+# datasource API /datasource/save.
+#
+# Warning: This config key is deprecated and will be removed in version 2.0.0"
+OLD_API_CHECK_DATASET_OWNERSHIP = True
 
 # SQLA table mutator, every time we fetch the metadata for a certain table
 # (superset.connectors.sqla.models.SqlaTable), we call this hook
@@ -965,6 +1108,36 @@ SIP_15_TOAST_MESSAGE = (
 # conventions and such. You can find examples in the tests.
 SQLA_TABLE_MUTATOR = lambda table: table
 
+# Global async query config options.
+# Requires GLOBAL_ASYNC_QUERIES feature flag to be enabled.
+GLOBAL_ASYNC_QUERIES_REDIS_CONFIG = {
+    "port": 6379,
+    "host": "127.0.0.1",
+    "password": "",
+    "db": 0,
+}
+GLOBAL_ASYNC_QUERIES_REDIS_STREAM_PREFIX = "async-events-"
+GLOBAL_ASYNC_QUERIES_REDIS_STREAM_LIMIT = 1000
+GLOBAL_ASYNC_QUERIES_REDIS_STREAM_LIMIT_FIREHOSE = 1000000
+GLOBAL_ASYNC_QUERIES_JWT_COOKIE_NAME = "async-token"
+GLOBAL_ASYNC_QUERIES_JWT_COOKIE_SECURE = False
+GLOBAL_ASYNC_QUERIES_JWT_SECRET = "test-secret-change-me"
+GLOBAL_ASYNC_QUERIES_TRANSPORT = "polling"
+GLOBAL_ASYNC_QUERIES_POLLING_DELAY = 500
+
+# It's possible to add a dataset health check logic which is specific to your system.
+# It will get executed each time when user open a chart's explore view.
+DATASET_HEALTH_CHECK = None
+
+# SQLalchemy link doc reference
+SQLALCHEMY_DOCS_URL = "https://docs.sqlalchemy.org/en/13/core/engines.html"
+SQLALCHEMY_DISPLAY_TEXT = "SQLAlchemy docs"
+
+# -------------------------------------------------------------------
+# *                WARNING:  STOP EDITING  HERE                    *
+# -------------------------------------------------------------------
+# Don't add config values below this line since local configs won't be
+# able to override them.
 if CONFIG_PATH_ENV_VAR in os.environ:
     # Explicitly import config module that is not necessarily in pythonpath; useful
     # for case where app is being executed via pex.

@@ -17,8 +17,11 @@
 # isort:skip_file
 import textwrap
 import unittest
+from unittest import mock
+from tests.fixtures.birth_names_dashboard import load_birth_names_dashboard_with_slices
 
 import pandas
+import pytest
 from sqlalchemy.engine.url import make_url
 
 import tests.test_app
@@ -28,6 +31,7 @@ from superset.models.slice import Slice
 from superset.utils.core import get_example_database, QueryStatus
 
 from .base_tests import SupersetTestCase
+from .fixtures.energy_dashboard import load_energy_table_with_slice
 
 
 class TestDatabaseModel(SupersetTestCase):
@@ -107,6 +111,99 @@ class TestDatabaseModel(SupersetTestCase):
         user_name = make_url(model.get_sqla_engine(user_name=example_user).url).username
         self.assertNotEqual(example_user, user_name)
 
+    @mock.patch("superset.models.core.create_engine")
+    def test_impersonate_user_presto(self, mocked_create_engine):
+        uri = "presto://localhost"
+        principal_user = "logged_in_user"
+        extra = """
+                {
+                    "metadata_params": {},
+                    "engine_params": {
+                               "connect_args":{
+                                  "protocol": "https",
+                                  "username":"original_user",
+                                  "password":"original_user_password"
+                               }
+                    },
+                    "metadata_cache_timeout": {},
+                    "schemas_allowed_for_csv_upload": []
+                }
+                """
+
+        model = Database(database_name="test_database", sqlalchemy_uri=uri, extra=extra)
+
+        model.impersonate_user = True
+        model.get_sqla_engine(user_name=principal_user)
+        call_args = mocked_create_engine.call_args
+
+        assert str(call_args[0][0]) == "presto://logged_in_user@localhost"
+
+        assert call_args[1]["connect_args"] == {
+            "protocol": "https",
+            "username": "original_user",
+            "password": "original_user_password",
+            "principal_username": "logged_in_user",
+        }
+
+        model.impersonate_user = False
+        model.get_sqla_engine(user_name=principal_user)
+        call_args = mocked_create_engine.call_args
+
+        assert str(call_args[0][0]) == "presto://localhost"
+
+        assert call_args[1]["connect_args"] == {
+            "protocol": "https",
+            "username": "original_user",
+            "password": "original_user_password",
+        }
+
+    @mock.patch("superset.models.core.create_engine")
+    def test_impersonate_user_hive(self, mocked_create_engine):
+        uri = "hive://localhost"
+        principal_user = "logged_in_user"
+        extra = """
+                {
+                    "metadata_params": {},
+                    "engine_params": {
+                               "connect_args":{
+                                  "protocol": "https",
+                                  "username":"original_user",
+                                  "password":"original_user_password"
+                               }
+                    },
+                    "metadata_cache_timeout": {},
+                    "schemas_allowed_for_csv_upload": []
+                }
+                """
+
+        model = Database(database_name="test_database", sqlalchemy_uri=uri, extra=extra)
+
+        model.impersonate_user = True
+        model.get_sqla_engine(user_name=principal_user)
+        call_args = mocked_create_engine.call_args
+
+        assert str(call_args[0][0]) == "hive://localhost"
+
+        assert call_args[1]["connect_args"] == {
+            "protocol": "https",
+            "username": "original_user",
+            "password": "original_user_password",
+            "configuration": {"hive.server2.proxy.user": "logged_in_user"},
+        }
+
+        model.impersonate_user = False
+        model.get_sqla_engine(user_name=principal_user)
+        call_args = mocked_create_engine.call_args
+
+        assert str(call_args[0][0]) == "hive://localhost"
+
+        assert call_args[1]["connect_args"] == {
+            "protocol": "https",
+            "username": "original_user",
+            "password": "original_user_password",
+        }
+
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
     def test_select_star(self):
         db = get_example_database()
         table_name = "energy_usage"
@@ -211,6 +308,7 @@ class TestDatabaseModel(SupersetTestCase):
 
 
 class TestSqlaTableModel(SupersetTestCase):
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_get_timestamp_expression(self):
         tbl = self.get_table_by_name("birth_names")
         ds_col = tbl.get_column("ds")
@@ -230,6 +328,7 @@ class TestSqlaTableModel(SupersetTestCase):
             self.assertEqual(compiled, "DATE(DATE_ADD(ds, 1))")
         ds_col.expression = prev_ds_expr
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_get_timestamp_expression_epoch(self):
         tbl = self.get_table_by_name("birth_names")
         ds_col = tbl.get_column("ds")
@@ -268,7 +367,7 @@ class TestSqlaTableModel(SupersetTestCase):
         spec.allows_joins = inner_join
         arbitrary_gby = "state || gender || '_test'"
         arbitrary_metric = dict(
-            label="arbitrary", expressionType="SQL", sqlExpression="SUM(sum_boys)"
+            label="arbitrary", expressionType="SQL", sqlExpression="SUM(num_boys)"
         )
         query_obj = dict(
             groupby=[arbitrary_gby, "name"],
@@ -294,6 +393,7 @@ class TestSqlaTableModel(SupersetTestCase):
         self.assertFalse(qr.df.empty)
         return qr.df
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_query_with_expr_groupby_timeseries(self):
         if get_example_database().backend == "presto":
             # TODO(bkyryliuk): make it work for presto.
@@ -310,34 +410,18 @@ class TestSqlaTableModel(SupersetTestCase):
         name_list2 = cannonicalize_df(df1).name.values.tolist()
         self.assertFalse(df2.empty)
 
-        expected_namelist = [
-            "Anthony",
-            "Brian",
-            "Christopher",
-            "Daniel",
-            "David",
-            "Eric",
-            "James",
-            "Jeffrey",
-            "John",
-            "Joseph",
-            "Kenneth",
-            "Kevin",
-            "Mark",
-            "Michael",
-            "Paul",
-        ]
-        assert name_list2 == expected_namelist
-        assert name_list1 == expected_namelist
+        assert name_list2 == name_list1
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_query_with_expr_groupby(self):
         self.query_with_expr_helper(is_timeseries=False)
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_sql_mutator(self):
         tbl = self.get_table_by_name("birth_names")
         query_obj = dict(
             groupby=[],
-            metrics=[],
+            metrics=None,
             filter=[],
             is_timeseries=False,
             columns=["name"],
@@ -378,14 +462,18 @@ class TestSqlaTableModel(SupersetTestCase):
 
         self.assertTrue("Metric 'invalid' does not exist", context.exception)
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_data_for_slices(self):
         tbl = self.get_table_by_name("birth_names")
         slc = (
             metadata_db.session.query(Slice)
-            .filter_by(datasource_id=tbl.id, datasource_type=tbl.type)
+            .filter_by(
+                datasource_id=tbl.id,
+                datasource_type=tbl.type,
+                slice_name="Participants",
+            )
             .first()
         )
-
         data_for_slices = tbl.data_for_slices([slc])
         self.assertEqual(len(data_for_slices["columns"]), 0)
         self.assertEqual(len(data_for_slices["metrics"]), 1)

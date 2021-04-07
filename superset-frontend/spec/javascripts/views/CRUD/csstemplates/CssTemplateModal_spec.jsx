@@ -18,6 +18,7 @@
  */
 import React from 'react';
 import thunk from 'redux-thunk';
+import { Provider } from 'react-redux';
 import configureStore from 'redux-mock-store';
 import fetchMock from 'fetch-mock';
 import CssTemplateModal from 'src/views/CRUD/csstemplates/CssTemplateModal';
@@ -44,9 +45,11 @@ const mockedProps = {
 };
 
 async function mountAndWait(props = mockedProps) {
-  const mounted = mount(<CssTemplateModal show {...props} />, {
-    context: { store },
-  });
+  const mounted = mount(
+    <Provider store={store}>
+      <CssTemplateModal show {...props} />
+    </Provider>,
+  );
   await waitForComponentToPaint(mounted);
 
   return mounted;
@@ -71,13 +74,13 @@ describe('CssTemplateModal', () => {
     const addWrapper = await mountAndWait({});
     expect(
       addWrapper.find('[data-test="css-template-modal-title"]').text(),
-    ).toEqual('Add CSS Template');
+    ).toEqual('Add CSS template');
   });
 
   it('renders edit header when css template prop is included', () => {
     expect(
       wrapper.find('[data-test="css-template-modal-title"]').text(),
-    ).toEqual('Edit CSS Template Properties');
+    ).toEqual('Edit CSS template properties');
   });
 
   it('renders input elements for template name', () => {

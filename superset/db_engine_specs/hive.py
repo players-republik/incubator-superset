@@ -81,6 +81,9 @@ class HiveEngineSpec(PrestoEngineSpec):
     engine = "hive"
     engine_name = "Apache Hive"
     max_column_name_length = 767
+    allows_alias_to_source_column = True
+    allows_hidden_ordeby_agg = False
+
     # pylint: disable=line-too-long
     _time_grain_expressions = {
         None: "{col}",
@@ -487,26 +490,28 @@ class HiveEngineSpec(PrestoEngineSpec):
         # the configuraiton dictionary. See get_configuration_for_impersonation
 
     @classmethod
-    def get_configuration_for_impersonation(
-        cls, uri: str, impersonate_user: bool, username: Optional[str]
-    ) -> Dict[str, str]:
+    def update_impersonation_config(
+        cls, connect_args: Dict[str, Any], uri: str, username: Optional[str],
+    ) -> None:
         """
-        Return a configuration dictionary that can be merged with other configs
+        Update a configuration dictionary
         that can set the correct properties for impersonating users
+        :param connect_args:
         :param uri: URI string
         :param impersonate_user: Flag indicating if impersonation is enabled
         :param username: Effective username
-        :return: Configs required for impersonation
+        :return: None
         """
-        configuration = {}
         url = make_url(uri)
         backend_name = url.get_backend_name()
 
         # Must be Hive connection, enable impersonation, and set optional param
         # auth=LDAP|KERBEROS
-        if backend_name == "hive" and impersonate_user and username is not None:
+        # this will set hive.server2.proxy.user=$effective_username on connect_args['configuration']
+        if backend_name == "hive" and username is not None:
+            configuration = connect_args.get("configuration", {})
             configuration["hive.server2.proxy.user"] = username
-        return configuration
+            connect_args["configuration"] = configuration
 
     @staticmethod
     def execute(  # type: ignore

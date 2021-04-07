@@ -23,6 +23,7 @@ import pytest
 from selenium.common.exceptions import WebDriverException
 from slack import errors, WebClient
 
+from tests.fixtures.world_bank_dashboard import load_world_bank_dashboard_with_slices
 from tests.test_app import app
 from superset import db
 from superset.models.dashboard import Dashboard
@@ -49,32 +50,31 @@ class TestSchedules(SupersetTestCase):
     BCC = "bcc@superset.com"
     CSV = read_fixture("trends.csv")
 
-    @classmethod
-    def setUpClass(cls):
+    @pytest.fixture()
+    def add_schedule_slice_and_dashboard(self):
         with app.app_context():
-            cls.common_data = dict(
+            self.common_data = dict(
                 active=True,
                 crontab="* * * * *",
-                recipients=cls.RECIPIENTS,
+                recipients=self.RECIPIENTS,
                 deliver_as_group=True,
                 delivery_type=EmailDeliveryType.inline,
             )
-
             # Pick up a sample slice and dashboard
-            slce = db.session.query(Slice).filter_by(slice_name="Participants").one()
+            slice = db.session.query(Slice).filter_by(slice_name="Region Filter").one()
             dashboard = (
                 db.session.query(Dashboard)
                 .filter_by(dashboard_title="World Bank's Data")
                 .one()
             )
 
-            dashboard_schedule = DashboardEmailSchedule(**cls.common_data)
+            dashboard_schedule = DashboardEmailSchedule(**self.common_data)
             dashboard_schedule.dashboard_id = dashboard.id
             dashboard_schedule.user_id = 1
             db.session.add(dashboard_schedule)
 
-            slice_schedule = SliceEmailSchedule(**cls.common_data)
-            slice_schedule.slice_id = slce.id
+            slice_schedule = SliceEmailSchedule(**self.common_data)
+            slice_schedule.slice_id = slice.id
             slice_schedule.user_id = 1
             slice_schedule.email_format = SliceEmailReportFormat.data
             slice_schedule.slack_channel = "#test_channel"
@@ -82,17 +82,17 @@ class TestSchedules(SupersetTestCase):
             db.session.add(slice_schedule)
             db.session.commit()
 
-            cls.slice_schedule = slice_schedule.id
-            cls.dashboard_schedule = dashboard_schedule.id
+            self.slice_schedule = slice_schedule.id
+            self.dashboard_schedule = dashboard_schedule.id
 
-    @classmethod
-    def tearDownClass(cls):
+        yield
+
         with app.app_context():
             db.session.query(SliceEmailSchedule).filter_by(
-                id=cls.slice_schedule
+                id=self.slice_schedule
             ).delete()
             db.session.query(DashboardEmailSchedule).filter_by(
-                id=cls.dashboard_schedule
+                id=self.dashboard_schedule
             ).delete()
             db.session.commit()
 
@@ -174,6 +174,9 @@ class TestSchedules(SupersetTestCase):
         create_webdriver(db.session)
         mock_driver.add_cookie.assert_called_once()
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
     @patch("superset.tasks.schedules.time")
@@ -207,6 +210,9 @@ class TestSchedules(SupersetTestCase):
         driver.screenshot.assert_not_called()
         send_email_smtp.assert_called_once()
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
     @patch("superset.tasks.schedules.time")
@@ -250,6 +256,9 @@ class TestSchedules(SupersetTestCase):
             element.screenshot_as_png,
         )
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
     @patch("superset.tasks.schedules.time")
@@ -293,6 +302,9 @@ class TestSchedules(SupersetTestCase):
             driver.screenshot.return_value,
         )
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
     @patch("superset.tasks.schedules.time")
@@ -334,6 +346,9 @@ class TestSchedules(SupersetTestCase):
         self.assertEqual(send_email_smtp.call_count, 2)
         self.assertEqual(send_email_smtp.call_args[1]["bcc"], self.BCC)
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.slack_util.WebClient.files_upload")
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
@@ -382,11 +397,14 @@ class TestSchedules(SupersetTestCase):
             {
                 "channels": "#test_channel",
                 "file": element.screenshot_as_png,
-                "initial_comment": f"\n        *Participants*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
-                "title": "[Report]  Participants",
+                "initial_comment": f"\n        *Region Filter*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
+                "title": "[Report]  Region Filter",
             },
         )
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.slack_util.WebClient.files_upload")
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
     @patch("superset.tasks.schedules.send_email_smtp")
@@ -436,11 +454,14 @@ class TestSchedules(SupersetTestCase):
             {
                 "channels": "#test_channel",
                 "file": element.screenshot_as_png,
-                "initial_comment": f"\n        *Participants*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
-                "title": "[Report]  Participants",
+                "initial_comment": f"\n        *Region Filter*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
+                "title": "[Report]  Region Filter",
             },
         )
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.slack_util.WebClient.files_upload")
     @patch("superset.tasks.schedules.urllib.request.OpenerDirector.open")
     @patch("superset.tasks.schedules.urllib.request.urlopen")
@@ -482,11 +503,14 @@ class TestSchedules(SupersetTestCase):
             {
                 "channels": "#test_channel",
                 "file": self.CSV,
-                "initial_comment": f"\n        *Participants*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
-                "title": "[Report]  Participants",
+                "initial_comment": f"\n        *Region Filter*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
+                "title": "[Report]  Region Filter",
             },
         )
 
+    @pytest.mark.usefixtures(
+        "load_world_bank_dashboard_with_slices", "add_schedule_slice_and_dashboard"
+    )
     @patch("superset.tasks.slack_util.WebClient.files_upload")
     @patch("superset.tasks.schedules.urllib.request.urlopen")
     @patch("superset.tasks.schedules.urllib.request.OpenerDirector.open")
@@ -526,8 +550,8 @@ class TestSchedules(SupersetTestCase):
             {
                 "channels": "#test_channel",
                 "file": self.CSV,
-                "initial_comment": f"\n        *Participants*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
-                "title": "[Report]  Participants",
+                "initial_comment": f"\n        *Region Filter*\n\n        <http://0.0.0.0:8080/superset/slice/{schedule.slice_id}/|Explore in Superset>\n        ",
+                "title": "[Report]  Region Filter",
             },
         )
 

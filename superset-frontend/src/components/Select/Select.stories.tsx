@@ -28,7 +28,7 @@ const OPTIONS = [
 ];
 
 export default {
-  title: 'Select Component',
+  title: 'Select',
   argTypes: {
     options: {
       type: 'select',
@@ -49,49 +49,55 @@ export default {
   },
 };
 
-export const SelectGallery = ({ value }: { value: OptionTypeBase }) => {
-  return (
-    <>
-      <h4>With default value</h4>
-      <Select
-        value={OPTIONS[0]}
-        ignoreAccents={false}
-        name="select-datasource"
-        onChange={() => {}}
-        options={OPTIONS}
-        placeholder="choose one"
-        width={600}
-      />
-      <hr />
-      <h4>With no value</h4>
-      <Select
-        ignoreAccents={false}
-        name="select-datasource"
-        onChange={() => {}}
-        options={OPTIONS}
-        placeholder="choose one"
-        width={600}
-        value={value}
-      />
-      <hr />
-      <h4>Multi select</h4>
-      <Select
-        ignoreAccents={false}
-        name="select-datasource"
-        onChange={() => {}}
-        options={OPTIONS}
-        placeholder="choose one or more values"
-        width={600}
-        value={[OPTIONS[0]]}
-        multi
-      />
-    </>
-  );
-};
+export const SelectGallery = ({ value }: { value: OptionTypeBase }) => (
+  <>
+    <h4>With default value</h4>
+    <Select
+      value={OPTIONS[0]}
+      ignoreAccents={false}
+      name="select-datasource"
+      onChange={() => {}}
+      options={OPTIONS}
+      placeholder="choose one"
+      width={600}
+    />
+    <hr />
+    <h4>With no value</h4>
+    <Select
+      ignoreAccents={false}
+      name="select-datasource"
+      onChange={() => {}}
+      options={OPTIONS}
+      placeholder="choose one"
+      width={600}
+      value={value}
+    />
+    <hr />
+    <h4>Multi select</h4>
+    <Select
+      ignoreAccents={false}
+      name="select-datasource"
+      onChange={() => {}}
+      options={OPTIONS}
+      placeholder="choose one or more values"
+      width={600}
+      value={[OPTIONS[0]]}
+      multi
+    />
+  </>
+);
 
 SelectGallery.args = {
   value: '',
   options: OPTIONS,
+};
+
+SelectGallery.story = {
+  parameters: {
+    knobs: {
+      disabled: true,
+    },
+  },
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -126,4 +132,12 @@ InteractiveSelect.args = {
   options: OPTIONS,
   clearable: false,
   placeholder: "I'm interactive",
+};
+
+InteractiveSelect.story = {
+  parameters: {
+    knobs: {
+      disabled: true,
+    },
+  },
 };

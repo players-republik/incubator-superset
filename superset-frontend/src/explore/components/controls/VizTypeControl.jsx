@@ -19,12 +19,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { Row, Col, FormControl } from 'react-bootstrap';
-import { t, getChartMetadataRegistry } from '@superset-ui/core';
+import { Behavior, t, getChartMetadataRegistry } from '@superset-ui/core';
+import { useDynamicPluginContext } from 'src/components/DynamicPlugins';
 import { Tooltip } from 'src/common/components/Tooltip';
 import Modal from 'src/common/components/Modal';
 import Label from 'src/components/Label';
 import ControlHeader from '../ControlHeader';
 import './VizTypeControl.less';
+import { FeatureFlag, isFeatureEnabled } from '../../../featureFlags';
 
 const propTypes = {
   description: PropTypes.string,
@@ -32,12 +34,12 @@ const propTypes = {
   name: PropTypes.string.isRequired,
   onChange: PropTypes.func,
   value: PropTypes.string.isRequired,
-  labelBsStyle: PropTypes.string,
+  labelType: PropTypes.string,
 };
 
 const defaultProps = {
   onChange: () => {},
-  labelBsStyle: 'default',
+  labelType: 'default',
 };
 
 const registry = getChartMetadataRegistry();
@@ -83,7 +85,7 @@ const DEFAULT_ORDER = [
   'partition',
   'event_flow',
   'deck_path',
-  'directed_force',
+  'graph_chart',
   'world_map',
   'paired_ttest',
   'para',
@@ -91,6 +93,24 @@ const DEFAULT_ORDER = [
 ];
 
 const typesWithDefaultOrder = new Set(DEFAULT_ORDER);
+
+function VizSupportValidation({ vizType }) {
+  const state = useDynamicPluginContext();
+  if (state.loading || registry.has(vizType)) {
+    return null;
+  }
+  return (
+    <div className="text-danger">
+      <i className="fa fa-exclamation-circle text-danger" />{' '}
+      <small>{t('This visualization type is not supported.')}</small>
+    </div>
+  );
+}
+
+const nativeFilterGate = behaviors =>
+  !behaviors.includes(Behavior.NATIVE_FILTER) ||
+  (isFeatureEnabled(FeatureFlag.DASHBOARD_CROSS_FILTERS) &&
+    behaviors.includes(Behavior.CROSS_FILTER));
 
 const VizTypeControl = props => {
   const [showModal, setShowModal] = useState(false);
@@ -147,16 +167,26 @@ const VizTypeControl = props => {
     );
   };
 
-  const { value, labelBsStyle } = props;
+  const { value, labelType } = props;
   const filterString = filter.toLowerCase();
 
   const filteredTypes = DEFAULT_ORDER.filter(type => registry.has(type))
+    .filter(type => {
+      const behaviors = registry.get(type)?.behaviors || [];
+      return nativeFilterGate(behaviors);
+    })
     .map(type => ({
       key: type,
       value: registry.get(type),
     }))
     .concat(
-      registry.entries().filter(({ key }) => !typesWithDefaultOrder.has(key)),
+      registry
+        .entries()
+        .filter(entry => {
+          const behaviors = entry.value?.behaviors || [];
+          return nativeFilterGate(behaviors);
+        })
+        .filter(({ key }) => !typesWithDefaultOrder.has(key)),
     )
     .filter(entry => entry.value.name.toLowerCase().includes(filterString));
 
@@ -182,15 +212,14 @@ const VizTypeControl = props => {
         title={t('Click to change visualization type')}
       >
         <>
-          <Label onClick={toggleModal} bsStyle={labelBsStyle}>
+          <Label
+            onClick={toggleModal}
+            type={labelType}
+            data-test="visualization-type"
+          >
             {registry.has(value) ? registry.get(value).name : `${value}`}
           </Label>
-          {!registry.has(value) && (
-            <div className="text-danger">
-              <i className="fa fa-exclamation-circle text-danger" />{' '}
-              <small>{t('This visualization type is not supported.')}</small>
-            </div>
-          )}
+          <VizSupportValidation vizType={value} />
         </>
       </Tooltip>
       <Modal

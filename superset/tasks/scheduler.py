@@ -19,9 +19,12 @@ from datetime import datetime, timedelta
 from typing import Iterator
 
 import croniter
+from dateutil import parser
 
+from superset import app
 from superset.commands.exceptions import CommandException
 from superset.extensions import celery_app
+from superset.reports.commands.exceptions import ReportScheduleUnexpectedError
 from superset.reports.commands.execute import AsyncExecuteReportScheduleCommand
 from superset.reports.commands.log_prune import AsyncPruneReportScheduleLogCommand
 from superset.reports.dao import ReportScheduleDAO
@@ -30,7 +33,8 @@ from superset.utils.celery import session_scope
 logger = logging.getLogger(__name__)
 
 
-def cron_schedule_window(cron: str, window_size: int = 10) -> Iterator[datetime]:
+def cron_schedule_window(cron: str) -> Iterator[datetime]:
+    window_size = app.config["ALERT_REPORTS_CRON_WINDOW_SIZE"]
     utc_now = datetime.utcnow()
     start_at = utc_now - timedelta(seconds=1)
     stop_at = utc_now + timedelta(seconds=window_size)
@@ -50,15 +54,24 @@ def scheduler() -> None:
         active_schedules = ReportScheduleDAO.find_active(session)
         for active_schedule in active_schedules:
             for schedule in cron_schedule_window(active_schedule.crontab):
+                logger.info(
+                    "Scheduling alert %s eta: %s", active_schedule.name, schedule
+                )
                 execute.apply_async((active_schedule.id, schedule,), eta=schedule)
 
 
 @celery_app.task(name="reports.execute")
-def execute(report_schedule_id: int, scheduled_dttm: datetime) -> None:
+def execute(report_schedule_id: int, scheduled_dttm: str) -> None:
     try:
-        AsyncExecuteReportScheduleCommand(report_schedule_id, scheduled_dttm).run()
+        task_id = execute.request.id
+        scheduled_dttm_ = parser.parse(scheduled_dttm)
+        AsyncExecuteReportScheduleCommand(
+            task_id, report_schedule_id, scheduled_dttm_,
+        ).run()
+    except ReportScheduleUnexpectedError as ex:
+        logger.error("An unexpected occurred while executing the report: %s", ex)
     except CommandException as ex:
-        logger.error("An exception occurred while executing the report: %s", ex)
+        logger.info("Report state: %s", ex)
 
 
 @celery_app.task(name="reports.prune_log")

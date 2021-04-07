@@ -155,6 +155,7 @@ class Database(
         "allow_csv_upload",
         "extra",
     ]
+    extra_import_fields = ["password"]
     export_children = ["tables"]
 
     def __repr__(self) -> str:
@@ -174,7 +175,7 @@ class Database(
             return self.db_engine_spec.get_function_names(self)
         except Exception as ex:  # pylint: disable=broad-except
             # function_names property is used in bulk APIs and should not hard crash
-            # more info in: https://github.com/apache/incubator-superset/issues/9678
+            # more info in: https://github.com/apache/superset/issues/9678
             logger.error(
                 "Failed to fetch database function names with error: %s", str(ex)
             )
@@ -182,14 +183,11 @@ class Database(
 
     @property
     def allows_cost_estimate(self) -> bool:
-        extra = self.get_extra()
-
-        database_version = extra.get("version")
+        extra = self.get_extra() or {}
         cost_estimate_enabled: bool = extra.get("cost_estimate_enabled")  # type: ignore
 
         return (
-            self.db_engine_spec.get_allow_cost_estimate(database_version)
-            and cost_estimate_enabled
+            self.db_engine_spec.get_allow_cost_estimate(extra) and cost_estimate_enabled
         )
 
     @property
@@ -327,16 +325,11 @@ class Database(
             params["poolclass"] = NullPool
 
         connect_args = params.get("connect_args", {})
-        configuration = connect_args.get("configuration", {})
-
-        # If using Hive, this will set hive.server2.proxy.user=$effective_username
-        configuration.update(
-            self.db_engine_spec.get_configuration_for_impersonation(
-                str(sqlalchemy_url), self.impersonate_user, effective_username
+        if self.impersonate_user:
+            self.db_engine_spec.update_impersonation_config(
+                connect_args, str(sqlalchemy_url), effective_username
             )
-        )
-        if configuration:
-            connect_args["configuration"] = configuration
+
         if connect_args:
             params["connect_args"] = connect_args
 
@@ -375,35 +368,39 @@ class Database(
         username = utils.get_username()
 
         def needs_conversion(df_series: pd.Series) -> bool:
-            return not df_series.empty and isinstance(df_series[0], (list, dict))
+            return (
+                not df_series.empty
+                and isinstance(df_series, pd.Series)
+                and isinstance(df_series[0], (list, dict))
+            )
 
         def _log_query(sql: str) -> None:
             if log_query:
                 log_query(engine.url, sql, schema, username, __name__, security_manager)
 
         with closing(engine.raw_connection()) as conn:
-            with closing(conn.cursor()) as cursor:
-                for sql_ in sqls[:-1]:
-                    _log_query(sql_)
-                    self.db_engine_spec.execute(cursor, sql_)
-                    cursor.fetchall()
+            cursor = conn.cursor()
+            for sql_ in sqls[:-1]:
+                _log_query(sql_)
+                self.db_engine_spec.execute(cursor, sql_)
+                cursor.fetchall()
 
-                _log_query(sqls[-1])
-                self.db_engine_spec.execute(cursor, sqls[-1])
+            _log_query(sqls[-1])
+            self.db_engine_spec.execute(cursor, sqls[-1])
 
-                data = self.db_engine_spec.fetch_data(cursor)
-                result_set = SupersetResultSet(
-                    data, cursor.description, self.db_engine_spec
-                )
-                df = result_set.to_pandas_df()
-                if mutator:
-                    mutator(df)
+            data = self.db_engine_spec.fetch_data(cursor)
+            result_set = SupersetResultSet(
+                data, cursor.description, self.db_engine_spec
+            )
+            df = result_set.to_pandas_df()
+            if mutator:
+                df = mutator(df)
 
-                for k, v in df.dtypes.items():
-                    if v.type == numpy.object_ and needs_conversion(df[k]):
-                        df[k] = df[k].apply(utils.json_dumps_w_dates)
+            for col, coltype in df.dtypes.to_dict().items():
+                if coltype == numpy.object_ and needs_conversion(df[col]):
+                    df[col] = df[col].apply(utils.json_dumps_w_dates)
 
-                return df
+            return df
 
     def compile_sqla_query(self, qry: Select, schema: Optional[str] = None) -> str:
         engine = self.get_sqla_engine(schema=schema)
@@ -630,7 +627,10 @@ class Database(
     def get_pk_constraint(
         self, table_name: str, schema: Optional[str] = None
     ) -> Dict[str, Any]:
-        return self.inspector.get_pk_constraint(table_name, schema)
+        pk_constraint = self.inspector.get_pk_constraint(table_name, schema) or {}
+        return {
+            key: utils.base_json_conv(value) for key, value in pk_constraint.items()
+        }
 
     def get_foreign_keys(
         self, table_name: str, schema: Optional[str] = None

@@ -18,37 +18,46 @@
  */
 import React from 'react';
 import { styled } from '@superset-ui/core';
-// eslint-disable-next-line no-restricted-imports
-import { Menu as AntdMenu, Dropdown, Skeleton } from 'antd';
+import { Dropdown, Menu as AntdMenu, Input as AntdInput, Skeleton } from 'antd';
 import { DropDownProps } from 'antd/lib/dropdown';
 /*
   Antd is re-exported from here so we can override components with Emotion as needed.
 
   For documentation, see https://ant.design/components/overview/
  */
-// eslint-disable-next-line no-restricted-imports
 export {
   AutoComplete,
   Avatar,
-  Button,
   Card,
-  Collapse,
+  Checkbox,
+  Col,
   DatePicker,
+  Divider,
   Dropdown,
+  Form,
   Empty,
-  Input,
+  InputNumber,
   Modal,
+  Typography,
+  Tree,
   Popover,
-  Select,
+  Slider,
+  Row,
+  Space,
   Skeleton,
   Switch,
-  Radio,
+  Tag,
   Tabs,
   Tooltip,
+  Input as AntdInput,
 } from 'antd';
+export { FormInstance } from 'antd/lib/form';
+export { RadioChangeEvent } from 'antd/lib/radio';
+export { TreeProps } from 'antd/lib/tree';
+export { default as Alert, AlertProps } from 'antd/lib/alert';
+export { default as Select, SelectProps } from 'antd/lib/select';
 
-export { default as Badge } from 'src/common/components/Badge';
-export { default as Progress } from 'src/common/components/ProgressBar';
+export { default as Collapse } from './Collapse';
 
 export const MenuItem = styled(AntdMenu.Item)`
   > a {
@@ -73,6 +82,14 @@ export const MenuItem = styled(AntdMenu.Item)`
 export const Menu = Object.assign(AntdMenu, {
   Item: MenuItem,
 });
+
+export const Input = styled(AntdInput)`
+  &[type='text'],
+  &[type='textarea'] {
+    border: 1px solid ${({ theme }) => theme.colors.secondary.light3};
+    border-radius: ${({ theme }) => theme.borderRadius}px;
+  }
+`;
 
 export const NoAnimationDropdown = (props: DropDownProps) => (
   <Dropdown

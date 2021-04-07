@@ -20,13 +20,13 @@ from typing import Any, Dict, NamedTuple, List, Pattern, Tuple, Union
 from unittest.mock import patch
 import pytest
 
-import tests.test_app
 from superset import db
 from superset.connectors.sqla.models import SqlaTable, TableColumn
 from superset.db_engine_specs.druid import DruidEngineSpec
 from superset.exceptions import QueryObjectValidationError
 from superset.models.core import Database
-from superset.utils.core import DbColumnType, get_example_database, FilterOperator
+from superset.utils.core import GenericDataType, get_example_database, FilterOperator
+from tests.fixtures.birth_names_dashboard import load_birth_names_dashboard_with_slices
 
 from .base_tests import SupersetTestCase
 
@@ -75,33 +75,31 @@ class TestDatabaseModel(SupersetTestCase):
         assert col.is_temporal is True
 
     def test_db_column_types(self):
-        test_cases: Dict[str, DbColumnType] = {
+        test_cases: Dict[str, GenericDataType] = {
             # string
-            "CHAR": DbColumnType.STRING,
-            "VARCHAR": DbColumnType.STRING,
-            "NVARCHAR": DbColumnType.STRING,
-            "STRING": DbColumnType.STRING,
-            "TEXT": DbColumnType.STRING,
-            "NTEXT": DbColumnType.STRING,
+            "CHAR": GenericDataType.STRING,
+            "VARCHAR": GenericDataType.STRING,
+            "NVARCHAR": GenericDataType.STRING,
+            "STRING": GenericDataType.STRING,
+            "TEXT": GenericDataType.STRING,
+            "NTEXT": GenericDataType.STRING,
             # numeric
-            "INT": DbColumnType.NUMERIC,
-            "BIGINT": DbColumnType.NUMERIC,
-            "FLOAT": DbColumnType.NUMERIC,
-            "DECIMAL": DbColumnType.NUMERIC,
-            "MONEY": DbColumnType.NUMERIC,
+            "INTEGER": GenericDataType.NUMERIC,
+            "BIGINT": GenericDataType.NUMERIC,
+            "DECIMAL": GenericDataType.NUMERIC,
             # temporal
-            "DATE": DbColumnType.TEMPORAL,
-            "DATETIME": DbColumnType.TEMPORAL,
-            "TIME": DbColumnType.TEMPORAL,
-            "TIMESTAMP": DbColumnType.TEMPORAL,
+            "DATE": GenericDataType.TEMPORAL,
+            "DATETIME": GenericDataType.TEMPORAL,
+            "TIME": GenericDataType.TEMPORAL,
+            "TIMESTAMP": GenericDataType.TEMPORAL,
         }
 
         tbl = SqlaTable(table_name="col_type_test_tbl", database=get_example_database())
         for str_type, db_col_type in test_cases.items():
             col = TableColumn(column_name="foo", type=str_type, table=tbl)
-            self.assertEqual(col.is_temporal, db_col_type == DbColumnType.TEMPORAL)
-            self.assertEqual(col.is_numeric, db_col_type == DbColumnType.NUMERIC)
-            self.assertEqual(col.is_string, db_col_type == DbColumnType.STRING)
+            self.assertEqual(col.is_temporal, db_col_type == GenericDataType.TEMPORAL)
+            self.assertEqual(col.is_numeric, db_col_type == GenericDataType.NUMERIC)
+            self.assertEqual(col.is_string, db_col_type == GenericDataType.STRING)
 
     @patch("superset.jinja_context.g")
     def test_extra_cache_keys(self, flask_g):
@@ -165,6 +163,7 @@ class TestDatabaseModel(SupersetTestCase):
             db.session.delete(table)
         db.session.commit()
 
+    @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
     def test_where_operators(self):
         class FilterTestCase(NamedTuple):
             operator: str
@@ -223,6 +222,28 @@ class TestDatabaseModel(SupersetTestCase):
         if get_example_database().backend != "presto":
             with pytest.raises(QueryObjectValidationError):
                 table.get_sqla_query(**query_obj)
+
+    def test_query_format_strip_trailing_semicolon(self):
+        query_obj = {
+            "granularity": None,
+            "from_dttm": None,
+            "to_dttm": None,
+            "groupby": ["user"],
+            "metrics": [],
+            "is_timeseries": False,
+            "filter": [],
+            "extras": {},
+        }
+
+        # Table with Jinja callable.
+        table = SqlaTable(
+            table_name="test_table",
+            sql="SELECT * from test_table;",
+            database=get_example_database(),
+        )
+        sqlaq = table.get_sqla_query(**query_obj)
+        sql = table.database.compile_sqla_query(sqlaq.sqla_query)
+        assert sql[-1] != ";"
 
     def test_multiple_sql_statements_raises_exception(self):
         base_query_obj = {

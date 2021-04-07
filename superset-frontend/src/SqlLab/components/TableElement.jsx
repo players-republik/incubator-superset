@@ -18,13 +18,17 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { ButtonGroup, Collapse, Well } from 'react-bootstrap';
+import { Well } from 'react-bootstrap';
+import Collapse from 'src/common/components/Collapse';
+import ButtonGroup from 'src/components/ButtonGroup';
 import shortid from 'shortid';
-import { t } from '@superset-ui/core';
+import { t, styled } from '@superset-ui/core';
+import { debounce } from 'lodash';
 
 import Fade from 'src/common/components/Fade';
+import { Tooltip } from 'src/common/components/Tooltip';
 import CopyToClipboard from '../../components/CopyToClipboard';
-import Link from '../../components/Link';
+import { IconTooltip } from '../../components/IconTooltip';
 import ColumnElement from './ColumnElement';
 import ShowSQL from './ShowSQL';
 import ModalTrigger from '../../components/ModalTrigger';
@@ -33,27 +37,31 @@ import Loading from '../../components/Loading';
 const propTypes = {
   table: PropTypes.object,
   actions: PropTypes.object,
-  timeout: PropTypes.number, // used for tests
 };
 
 const defaultProps = {
   actions: {},
   table: null,
-  timeout: 500,
 };
+
+const StyledSpan = styled.span`
+  color: ${({ theme }) => theme.colors.primary.dark1};
+  &: hover {
+    color: ${({ theme }) => theme.colors.primary.dark2};
+  }
+  cursor: pointer;
+`;
 
 class TableElement extends React.PureComponent {
   constructor(props) {
     super(props);
     this.state = {
       sortColumns: false,
-      expanded: true,
       hovered: false,
     };
-    this.removeFromStore = this.removeFromStore.bind(this);
     this.toggleSortColumns = this.toggleSortColumns.bind(this);
     this.removeTable = this.removeTable.bind(this);
-    this.setHover = this.setHover.bind(this);
+    this.setHover = debounce(this.setHover.bind(this), 100);
   }
 
   setHover(hovered) {
@@ -71,26 +79,13 @@ class TableElement extends React.PureComponent {
     this.props.actions.addQueryEditor(qe);
   }
 
-  toggleTable(e) {
-    e.preventDefault();
-    if (this.props.table.expanded) {
-      this.props.actions.collapseTable(this.props.table);
-    } else {
-      this.props.actions.expandTable(this.props.table);
-    }
-  }
-
   removeTable() {
-    this.setState({ expanded: false });
     this.props.actions.removeDataPreview(this.props.table);
+    this.props.actions.removeTable(this.props.table);
   }
 
   toggleSortColumns() {
     this.setState(prevState => ({ sortColumns: !prevState.sortColumns }));
-  }
-
-  removeFromStore() {
-    this.props.actions.removeTable(this.props.table);
   }
 
   renderWell() {
@@ -144,7 +139,7 @@ class TableElement extends React.PureComponent {
             <pre key={i}>{JSON.stringify(ix, null, '  ')}</pre>
           ))}
           triggerNode={
-            <Link
+            <IconTooltip
               className="fa fa-key pull-left m-l-2"
               tooltip={t('View keys & indexes (%s)', table.indexes.length)}
             />
@@ -155,10 +150,10 @@ class TableElement extends React.PureComponent {
     return (
       <ButtonGroup className="ws-el-controls">
         {keyLink}
-        <Link
+        <IconTooltip
           className={
             `fa fa-sort-${!this.state.sortColumns ? 'alpha' : 'numeric'}-asc ` +
-            'pull-left sort-cols m-l-2'
+            'pull-left sort-cols m-l-2 pointer'
           }
           onClick={this.toggleSortColumns}
           tooltip={
@@ -166,14 +161,13 @@ class TableElement extends React.PureComponent {
               ? t('Sort columns alphabetically')
               : t('Original table column order')
           }
-          href="#"
         />
         {table.selectStar && (
           <CopyToClipboard
             copyNode={
-              <a aria-label="Copy">
+              <IconTooltip aria-label="Copy">
                 <i aria-hidden className="fa fa-clipboard pull-left m-l-2" />
-              </a>
+              </IconTooltip>
             }
             text={table.selectStar}
             shouldShowText={false}
@@ -187,11 +181,10 @@ class TableElement extends React.PureComponent {
             title={t('CREATE VIEW statement')}
           />
         )}
-        <Link
-          className="fa fa-times table-remove pull-left m-l-2"
+        <IconTooltip
+          className="fa fa-times table-remove pull-left m-l-2 pointer"
           onClick={this.removeTable}
           tooltip={t('Remove table preview')}
-          href="#"
         />
       </ButtonGroup>
     );
@@ -200,37 +193,34 @@ class TableElement extends React.PureComponent {
   renderHeader() {
     const { table } = this.props;
     return (
-      <div className="clearfix">
-        <div className="pull-left">
-          <a
-            href="#"
-            className="table-name"
-            onClick={e => {
-              this.toggleTable(e);
-            }}
-          >
+      <div
+        className="clearfix header-container"
+        onMouseEnter={() => this.setHover(true)}
+        onMouseLeave={() => this.setHover(false)}
+      >
+        <Tooltip
+          id="copy-to-clipboard-tooltip"
+          placement="top"
+          style={{ cursor: 'pointer' }}
+          title={table.name}
+          trigger={['hover']}
+        >
+          <StyledSpan data-test="collapse" className="table-name">
             <strong>{table.name}</strong>
-          </a>
-        </div>
-        <div className="pull-right">
+          </StyledSpan>
+        </Tooltip>
+
+        <div className="pull-right header-right-side">
           {table.isMetadataLoading || table.isExtraMetadataLoading ? (
             <Loading position="inline" />
           ) : (
-            <Fade hovered={this.state.hovered}>{this.renderControls()}</Fade>
+            <Fade
+              hovered={this.state.hovered}
+              onClick={e => e.stopPropagation()}
+            >
+              {this.renderControls()}
+            </Fade>
           )}
-          <i
-            role="button"
-            aria-label="Toggle table"
-            tabIndex={0}
-            onClick={e => {
-              this.toggleTable(e);
-            }}
-            className={
-              'text-primary pointer m-l-10 ' +
-              'fa fa-lg ' +
-              `fa-angle-${table.expanded ? 'up' : 'down'}`
-            }
-          />
         </div>
       </div>
     );
@@ -255,39 +245,37 @@ class TableElement extends React.PureComponent {
         });
       }
     }
+
     const metadata = (
-      <Collapse in={table.expanded} timeout={this.props.timeout}>
+      <div
+        onMouseEnter={() => this.setHover(true)}
+        onMouseLeave={() => this.setHover(false)}
+        css={{ paddingTop: 6 }}
+      >
+        {this.renderWell()}
         <div>
-          {this.renderWell()}
-          <div className="table-columns m-t-5">
-            {cols &&
-              cols.map(col => <ColumnElement column={col} key={col.name} />)}
-          </div>
+          {cols &&
+            cols.map(col => <ColumnElement column={col} key={col.name} />)}
         </div>
-      </Collapse>
+      </div>
     );
     return metadata;
   }
 
   render() {
     return (
-      <Collapse
-        in={this.state.expanded}
-        timeout={this.props.timeout}
-        onExited={this.removeFromStore}
+      <Collapse.Panel
+        {...this.props}
+        header={this.renderHeader()}
+        className="TableElement"
+        forceRender="true"
       >
-        <div
-          className="TableElement table-schema m-b-10"
-          onMouseEnter={() => this.setHover(true)}
-          onMouseLeave={() => this.setHover(false)}
-        >
-          {this.renderHeader()}
-          <div>{this.renderBody()}</div>
-        </div>
-      </Collapse>
+        {this.renderBody()}
+      </Collapse.Panel>
     );
   }
 }
+
 TableElement.propTypes = propTypes;
 TableElement.defaultProps = defaultProps;
 

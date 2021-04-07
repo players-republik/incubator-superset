@@ -14,16 +14,66 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from flask import current_app as app, request
 from flask_caching import Cache
 from werkzeug.wrappers.etag import ETagResponseMixin
 
+from superset import db
 from superset.extensions import cache_manager
+from superset.models.cache import CacheKey
+from superset.stats_logger import BaseStatsLogger
+from superset.utils.core import json_int_dttm_ser
+
+config = app.config  # type: ignore
+stats_logger: BaseStatsLogger = config["STATS_LOGGER"]
+logger = logging.getLogger(__name__)
+
+
+# TODO: DRY up cache key code
+def json_dumps(obj: Any, sort_keys: bool = False) -> str:
+    return json.dumps(obj, default=json_int_dttm_ser, sort_keys=sort_keys)
+
+
+def generate_cache_key(values_dict: Dict[str, Any], key_prefix: str = "") -> str:
+    json_data = json_dumps(values_dict, sort_keys=True)
+    hash_str = hashlib.md5(json_data.encode("utf-8")).hexdigest()
+    return f"{key_prefix}{hash_str}"
+
+
+def set_and_log_cache(
+    cache_instance: Cache,
+    cache_key: str,
+    cache_value: Dict[str, Any],
+    cache_timeout: Optional[int] = None,
+    datasource_uid: Optional[str] = None,
+) -> None:
+    timeout = cache_timeout if cache_timeout else config["CACHE_DEFAULT_TIMEOUT"]
+    try:
+        dttm = datetime.utcnow().isoformat().split(".")[0]
+        value = {**cache_value, "dttm": dttm}
+        cache_instance.set(cache_key, value, timeout=timeout)
+        stats_logger.incr("set_cache_key")
+
+        if datasource_uid and config["STORE_CACHE_KEYS_IN_METADATA_DB"]:
+            ck = CacheKey(
+                cache_key=cache_key,
+                cache_timeout=cache_timeout,
+                datasource_uid=datasource_uid,
+            )
+            db.session.add(ck)
+    except Exception as ex:  # pylint: disable=broad-except
+        # cache.set call can fail if the backend is down or if
+        # the key is too large or whatever other reasons
+        logger.warning("Could not cache key %s", cache_key)
+        logger.exception(ex)
+
 
 # If a user sets `max_age` to 0, for long the browser should cache the
 # resource? Flask-Caching will cache forever, but for the HTTP header we need
@@ -76,9 +126,7 @@ def memoized_func(
 
 
 def etag_cache(
-    check_perms: Callable[..., Any],
-    cache: Cache = cache_manager.cache,
-    max_age: Optional[Union[int, float]] = None,
+    cache: Cache = cache_manager.cache, max_age: Optional[Union[int, float]] = None,
 ) -> Callable[..., Any]:
     """
     A decorator for caching views and handling etag conditional requests.
@@ -98,9 +146,6 @@ def etag_cache(
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> ETagResponseMixin:
-            # check if the user can access the resource
-            check_perms(*args, **kwargs)
-
             # for POST requests we can't set cache headers, use the response
             # cache nor use conditional requests; this will still use the
             # dataframe cache in `superset/viz.py`, though.

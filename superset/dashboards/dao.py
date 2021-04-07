@@ -18,14 +18,18 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from flask_appbuilder.models.sqla.interface import SQLAInterface
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import contains_eager
 
 from superset.dao.base import BaseDAO
+from superset.dashboards.commands.exceptions import DashboardNotFoundError
 from superset.dashboards.filters import DashboardFilter
 from superset.extensions import db
 from superset.models.core import FavStar, FavStarClassName
-from superset.models.dashboard import Dashboard
+from superset.models.dashboard import Dashboard, id_or_slug_filter
 from superset.models.slice import Slice
+from superset.utils import core
 from superset.utils.dashboard_filter_scopes_converter import copy_filter_scopes
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,67 @@ logger = logging.getLogger(__name__)
 class DashboardDAO(BaseDAO):
     model_cls = Dashboard
     base_filter = DashboardFilter
+
+    @staticmethod
+    def get_by_id_or_slug(id_or_slug: str) -> Dashboard:
+        query = (
+            db.session.query(Dashboard)
+            .filter(id_or_slug_filter(id_or_slug))
+            .outerjoin(Slice, Dashboard.slices)
+            .outerjoin(Slice.table)
+            .outerjoin(Dashboard.owners)
+            .outerjoin(Dashboard.roles)
+        )
+        # Apply dashboard base filters
+        query = DashboardFilter("id", SQLAInterface(Dashboard, db.session)).apply(
+            query, None
+        )
+        dashboard = query.one_or_none()
+        if not dashboard:
+            raise DashboardNotFoundError()
+        return dashboard
+
+    @staticmethod
+    def get_datasets_for_dashboard(id_or_slug: str) -> List[Any]:
+        query = (
+            db.session.query(Dashboard)
+            .filter(id_or_slug_filter(id_or_slug))
+            .outerjoin(Slice, Dashboard.slices)
+            .outerjoin(Slice.table)
+        )
+        # Apply dashboard base filters
+        query = DashboardFilter("id", SQLAInterface(Dashboard, db.session)).apply(
+            query, None
+        )
+        dashboard = query.one_or_none()
+        if not dashboard:
+            raise DashboardNotFoundError()
+        datasource_slices = core.indexed(dashboard.slices, "datasource")
+        data = [
+            datasource.data_for_slices(slices)
+            for datasource, slices in datasource_slices.items()
+            if datasource
+        ]
+        return data
+
+    @staticmethod
+    def get_charts_for_dashboard(dashboard_id: int) -> List[Slice]:
+        query = (
+            db.session.query(Dashboard)
+            .outerjoin(Slice, Dashboard.slices)
+            .outerjoin(Slice.table)
+            .filter(Dashboard.id == dashboard_id)
+            .options(contains_eager(Dashboard.slices))
+        )
+        # Apply dashboard base filters
+        query = DashboardFilter("id", SQLAInterface(Dashboard, db.session)).apply(
+            query, None
+        )
+
+        dashboard = query.one_or_none()
+        if not dashboard:
+            raise DashboardNotFoundError()
+        return dashboard.slices
 
     @staticmethod
     def validate_slug_uniqueness(slug: str) -> bool:

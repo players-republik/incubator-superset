@@ -20,14 +20,14 @@ import React, { useMemo } from 'react';
 import PropTypes from 'prop-types';
 import moment from 'moment';
 import { Well } from 'react-bootstrap';
-import ProgressBar from 'src/common/components/ProgressBar';
+import ProgressBar from 'src/components/ProgressBar';
 import Label from 'src/components/Label';
 import { t } from '@superset-ui/core';
 
 import TableView from 'src/components/TableView';
 import Button from 'src/components/Button';
 import { fDuration } from 'src/modules/dates';
-import Link from '../../components/Link';
+import { IconTooltip } from '../../components/IconTooltip';
 import ResultSet from './ResultSet';
 import ModalTrigger from '../../components/ModalTrigger';
 import HighlightedSql from './HighlightedSql';
@@ -143,8 +143,8 @@ const QueryTable = props => {
             <ModalTrigger
               className="ResultsModal"
               triggerNode={
-                <Label bsStyle="info" className="pointer">
-                  {t('view results')}
+                <Label type="info" className="pointer">
+                  {t('View results')}
                 </Label>
               }
               modalTitle={t('Data preview')}
@@ -175,9 +175,9 @@ const QueryTable = props => {
         let errorTooltip;
         if (q.errorMessage) {
           errorTooltip = (
-            <Link tooltip={q.errorMessage}>
+            <IconTooltip tooltip={q.errorMessage}>
               <i className="fa fa-exclamation-circle text-danger" />
-            </Link>
+            </IconTooltip>
           );
         }
         q.state = (
@@ -188,22 +188,22 @@ const QueryTable = props => {
         );
         q.actions = (
           <div>
-            <Link
-              className="fa fa-pencil m-r-3"
+            <IconTooltip
+              className="fa fa-pencil m-r-3 pointer"
               onClick={() => restoreSql(query)}
               tooltip={t(
                 'Overwrite text in the editor with a query on this table',
               )}
               placement="top"
             />
-            <Link
-              className="fa fa-plus-circle m-r-3"
+            <IconTooltip
+              className="fa fa-plus-circle m-r-3 pointer"
               onClick={() => openQueryInNewTab(query)}
               tooltip={t('Run query in a new tab')}
               placement="top"
             />
-            <Link
-              className="fa fa-trash m-r-3"
+            <IconTooltip
+              className="fa fa-trash m-r-3 pointer"
               tooltip={t('Remove query from log')}
               onClick={() => removeQuery(query)}
             />

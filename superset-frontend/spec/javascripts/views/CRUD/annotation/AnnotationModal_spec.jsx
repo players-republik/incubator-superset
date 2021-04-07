@@ -19,6 +19,7 @@
 import React from 'react';
 import thunk from 'redux-thunk';
 import configureStore from 'redux-mock-store';
+import { Provider } from 'react-redux';
 import fetchMock from 'fetch-mock';
 import AnnotationModal from 'src/views/CRUD/annotation/AnnotationModal';
 import Modal from 'src/common/components/Modal';
@@ -51,11 +52,12 @@ const mockedProps = {
 };
 
 async function mountAndWait(props = mockedProps) {
-  const mounted = mount(<AnnotationModal show {...props} />, {
-    context: { store },
-  });
+  const mounted = mount(
+    <Provider store={store}>
+      <AnnotationModal show {...props} />
+    </Provider>,
+  );
   await waitForComponentToPaint(mounted);
-
   return mounted;
 }
 
@@ -78,12 +80,12 @@ describe('AnnotationModal', () => {
     const addWrapper = await mountAndWait({});
     expect(
       addWrapper.find('[data-test="annotaion-modal-title"]').text(),
-    ).toEqual('Add Annotation');
+    ).toEqual('Add annotation');
   });
 
   it('renders edit header when annotation prop is included', () => {
     expect(wrapper.find('[data-test="annotaion-modal-title"]').text()).toEqual(
-      'Edit Annotation',
+      'Edit annotation',
     );
   });
 

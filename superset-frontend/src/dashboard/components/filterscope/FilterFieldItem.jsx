@@ -19,7 +19,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import cx from 'classnames';
-
 import FormLabel from 'src/components/FormLabel';
 
 const propTypes = {
@@ -29,13 +28,13 @@ const propTypes = {
 
 export default function FilterFieldItem({ label, isSelected }) {
   return (
-    <a
+    <span
       className={cx('filter-field-item filter-container', {
         'is-selected': isSelected,
       })}
     >
       <FormLabel htmlFor={label}>{label}</FormLabel>
-    </a>
+    </span>
   );
 }
 

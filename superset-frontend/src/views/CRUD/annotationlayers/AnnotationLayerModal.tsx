@@ -108,9 +108,21 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
     addDangerToast,
   );
 
+  const resetLayer = () => {
+    // Reset layer
+    setCurrentLayer({
+      name: '',
+      descr: '',
+    });
+  };
+
   // Functions
   const hide = () => {
     setIsHidden(true);
+
+    // Reset layer
+    resetLayer();
+
     onHide();
   };
 
@@ -121,9 +133,9 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
         const update_id = currentLayer.id;
         delete currentLayer.id;
         delete currentLayer.created_by;
-        updateResource(update_id, currentLayer).then(() => {
-          if (onLayerAdd) {
-            onLayerAdd();
+        updateResource(update_id, currentLayer).then(response => {
+          if (!response) {
+            return;
           }
 
           hide();
@@ -132,6 +144,10 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
     } else if (currentLayer) {
       // Create
       createResource(currentLayer).then(response => {
+        if (!response) {
+          return;
+        }
+
         if (onLayerAdd) {
           onLayerAdd(response);
         }
@@ -166,29 +182,33 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
   };
 
   // Initialize
-  if (
-    isEditMode &&
-    (!currentLayer ||
-      !currentLayer.id ||
-      (layer && layer.id !== currentLayer.id) ||
-      (isHidden && show))
-  ) {
-    if (layer && layer.id !== null && !loading) {
-      const id = layer.id || 0;
+  useEffect(() => {
+    if (
+      isEditMode &&
+      (!currentLayer ||
+        !currentLayer.id ||
+        (layer && layer.id !== currentLayer.id) ||
+        (isHidden && show))
+    ) {
+      if (show && layer && layer.id !== null && !loading) {
+        const id = layer.id || 0;
 
-      fetchResource(id).then(() => {
-        setCurrentLayer(resource);
-      });
+        fetchResource(id);
+      }
+    } else if (
+      !isEditMode &&
+      (!currentLayer || currentLayer.id || (isHidden && show))
+    ) {
+      // Reset layer
+      resetLayer();
     }
-  } else if (
-    !isEditMode &&
-    (!currentLayer || currentLayer.id || (isHidden && show))
-  ) {
-    setCurrentLayer({
-      name: '',
-      descr: '',
-    });
-  }
+  }, [layer, show]);
+
+  useEffect(() => {
+    if (resource) {
+      setCurrentLayer(resource);
+    }
+  }, [resource]);
 
   // Validation
   useEffect(() => {
@@ -219,17 +239,17 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
             <StyledIcon name="plus-large" />
           )}
           {isEditMode
-            ? t('Edit Annotation Layer Properties')
-            : t('Add Annotation Layer')}
+            ? t('Edit annotation layer properties')
+            : t('Add annotation layer')}
         </h4>
       }
     >
       <StyledAnnotationLayerTitle>
-        <h4>{t('Basic Information')}</h4>
+        <h4>{t('Basic information')}</h4>
       </StyledAnnotationLayerTitle>
       <LayerContainer>
         <div className="control-label">
-          {t('annotation layer name')}
+          {t('Annotation layer name')}
           <span className="required">*</span>
         </div>
         <input

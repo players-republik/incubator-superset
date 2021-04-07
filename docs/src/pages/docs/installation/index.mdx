@@ -41,14 +41,14 @@ all of the required dependencies.
 
 ### 2. Clone Superset's Github repository
 
-[Clone Superset's repo](https://github.com/apache/incubator-superset) in your terminal with the
+[Clone Superset's repo](https://github.com/apache/superset) in your terminal with the
 following command:
 
 ```bash
-$ git clone https://github.com/apache/incubator-superset.git
+$ git clone https://github.com/apache/superset.git
 ```
 
-Once that command completes successfully, you should see a new `incubator-superset` folder in your
+Once that command completes successfully, you should see a new `superset` folder in your
 current directory.
 
 ### 3. Launch Superset Through Docker Compose
@@ -56,19 +56,34 @@ current directory.
 Navigate to the folder you created in step 1:
 
 ```bash
-$ cd incubator-superset
+$ cd superset
+```
+
+We recommend that you check out and run the code from the last tagged release:
+
+```bash
+$ git checkout latest
 ```
 
 Then, run the following command:
 
 ```bash
-$ docker-compose up
+$ docker-compose -f docker-compose-non-dev.yml up
 ```
 
 You should see a wall of logging output from the containers being launched on your machine. Once
 this output slows, you should have a running instance of Superset on your local machine!
 
-### 4. Login to Superset
+**Note:** this will bring up superset in a non-dev mode, changes to the codebase will not be reflected.
+If you would like to run superset in dev mode, simply replace the previous command with:
+
+```bash
+$ docker-compose up
+```
+
+and wait for the `superset_node` container to finish building the assets.
+
+### 4. Log in to Superset
 
 Your local Superset instance also includes a Postgres server to store your data and is already
 pre-loaded with some example datasets that ship with Superset. You can access Superset now via your

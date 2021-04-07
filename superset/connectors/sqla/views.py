@@ -33,10 +33,11 @@ from wtforms.validators import Regexp
 from superset import app, db, is_feature_enabled
 from superset.connectors.base.views import DatasourceModelView
 from superset.connectors.sqla import models
-from superset.constants import RouteMethod
+from superset.constants import MODEL_VIEW_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.typing import FlaskResponse
 from superset.utils import core as utils
 from superset.views.base import (
+    check_ownership,
     create_table_permissions,
     DatasourceFilter,
     DeleteMixin,
@@ -55,6 +56,8 @@ class TableColumnInlineView(  # pylint: disable=too-many-ancestors
 ):
     datamodel = SQLAInterface(models.TableColumn)
     # TODO TODO, review need for this on related_views
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.RELATED_VIEW_SET | RouteMethod.API_SET
 
     list_title = _("Columns")
@@ -169,11 +172,34 @@ class TableColumnInlineView(  # pylint: disable=too-many-ancestors
 
     edit_form_extra_fields = add_form_extra_fields
 
+    def pre_add(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
+
+    def pre_update(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
+
+    def pre_delete(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
+
 
 class SqlMetricInlineView(  # pylint: disable=too-many-ancestors
     CompactCRUDMixin, SupersetModelView
 ):
     datamodel = SQLAInterface(models.SqlMetric)
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.RELATED_VIEW_SET | RouteMethod.API_SET
 
     list_title = _("Metrics")
@@ -209,10 +235,10 @@ class SqlMetricInlineView(  # pylint: disable=too-many-ancestors
         ),
         "extra": utils.markdown(
             "Extra data to specify metric metadata. Currently supports "
-            'certification data of the format: `{ "certification": "certified_by": '
+            'metadata of the format: `{ "certification": { "certified_by": '
             '"Data Platform Team", "details": "This metric is the source of truth." '
-            "} }`. This should be modified from the edit datasource model in "
-            "Explore to ensure correct formatting.",
+            '}, "warning_markdown": "This is a warning." }`. This should be modified '
+            "from the edit datasource model in Explore to ensure correct formatting.",
             True,
         ),
     }
@@ -240,6 +266,27 @@ class SqlMetricInlineView(  # pylint: disable=too-many-ancestors
     }
 
     edit_form_extra_fields = add_form_extra_fields
+
+    def pre_add(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
+
+    def pre_update(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
+
+    def pre_delete(self, item: "models.SqlMetric") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item.table)
 
 
 class RowLevelSecurityListWidget(
@@ -327,6 +374,8 @@ class TableModelView(  # pylint: disable=too-many-ancestors
     DatasourceModelView, DeleteMixin, YamlExportMixin
 ):
     datamodel = SQLAInterface(models.SqlaTable)
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.CRUD_SET
 
     list_title = _("Tables")
@@ -414,9 +463,9 @@ class TableModelView(  # pylint: disable=too-many-ancestors
         ),
         "extra": utils.markdown(
             "Extra data to specify table metadata. Currently supports "
-            'certification data of the format: `{ "certification": { "certified_by": '
+            'metadata of the format: `{ "certification": { "certified_by": '
             '"Data Platform Team", "details": "This table is the source of truth." '
-            "} }`.",
+            '}, "warning_markdown": "This is a warning." }`.',
             True,
         ),
     }
@@ -451,7 +500,17 @@ class TableModelView(  # pylint: disable=too-many-ancestors
     }
 
     def pre_add(self, item: "TableModelView") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
         validate_sqlatable(item)
+
+    def pre_update(self, item: "TableModelView") -> None:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
+        if app.config["OLD_API_CHECK_DATASET_OWNERSHIP"]:
+            check_ownership(item)
 
     def post_add(  # pylint: disable=arguments-differ
         self,
@@ -494,6 +553,9 @@ class TableModelView(  # pylint: disable=too-many-ancestors
     def refresh(  # pylint: disable=no-self-use, too-many-branches
         self, tables: Union["TableModelView", List["TableModelView"]]
     ) -> FlaskResponse:
+        logger.warning(
+            "This endpoint is deprecated and will be removed in version 2.0.0"
+        )
         if not isinstance(tables, list):
             tables = [tables]
 

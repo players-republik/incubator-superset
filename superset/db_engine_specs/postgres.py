@@ -14,17 +14,37 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import json
+import logging
+import re
 from datetime import datetime
-from typing import Any, List, Optional, Tuple, TYPE_CHECKING
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Match,
+    Optional,
+    Pattern,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 
 from pytz import _FixedOffset  # type: ignore
+from sqlalchemy.dialects.postgresql import ARRAY, DOUBLE_PRECISION, ENUM, JSON
 from sqlalchemy.dialects.postgresql.base import PGInspector
+from sqlalchemy.types import String, TypeEngine
 
 from superset.db_engine_specs.base import BaseEngineSpec
+from superset.exceptions import SupersetException
 from superset.utils import core as utils
+from superset.utils.core import ColumnSpec, GenericDataType
 
 if TYPE_CHECKING:
     from superset.models.core import Database  # pragma: no cover
+
+logger = logging.getLogger()
 
 
 # Replace psycopg2.tz.FixedOffsetTimezone with pytz, which is serializable by PyArrow
@@ -71,6 +91,46 @@ class PostgresEngineSpec(PostgresBaseEngineSpec):
     max_column_name_length = 63
     try_remove_schema_from_table_name = False
 
+    column_type_mappings = (
+        (
+            re.compile(r"^double precision", re.IGNORECASE),
+            DOUBLE_PRECISION(),
+            GenericDataType.NUMERIC,
+        ),
+        (
+            re.compile(r"^array.*", re.IGNORECASE),
+            lambda match: ARRAY(int(match[2])) if match[2] else String(),
+            utils.GenericDataType.STRING,
+        ),
+        (re.compile(r"^json.*", re.IGNORECASE), JSON(), utils.GenericDataType.STRING,),
+        (re.compile(r"^enum.*", re.IGNORECASE), ENUM(), utils.GenericDataType.STRING,),
+    )
+
+    @classmethod
+    def get_allow_cost_estimate(cls, extra: Dict[str, Any]) -> bool:
+        return True
+
+    @classmethod
+    def estimate_statement_cost(cls, statement: str, cursor: Any) -> Dict[str, Any]:
+        sql = f"EXPLAIN {statement}"
+        cursor.execute(sql)
+
+        result = cursor.fetchone()[0]
+        match = re.search(r"cost=([\d\.]+)\.\.([\d\.]+)", result)
+        if match:
+            return {
+                "Start-up cost": float(match.group(1)),
+                "Total cost": float(match.group(2)),
+            }
+
+        return {}
+
+    @classmethod
+    def query_cost_formatter(
+        cls, raw_cost: List[Dict[str, Any]]
+    ) -> List[Dict[str, str]]:
+        return [{k: str(v) for k, v in row.items()} for row in raw_cost]
+
     @classmethod
     def get_table_names(
         cls, database: "Database", inspector: PGInspector, schema: Optional[str]
@@ -85,7 +145,54 @@ class PostgresEngineSpec(PostgresBaseEngineSpec):
         tt = target_type.upper()
         if tt == utils.TemporalType.DATE:
             return f"TO_DATE('{dttm.date().isoformat()}', 'YYYY-MM-DD')"
-        if tt == utils.TemporalType.TIMESTAMP:
+        if "TIMESTAMP" in tt or "DATETIME" in tt:
             dttm_formatted = dttm.isoformat(sep=" ", timespec="microseconds")
             return f"""TO_TIMESTAMP('{dttm_formatted}', 'YYYY-MM-DD HH24:MI:SS.US')"""
         return None
+
+    @staticmethod
+    def get_extra_params(database: "Database") -> Dict[str, Any]:
+        """
+        For Postgres, the path to a SSL certificate is placed in `connect_args`.
+
+        :param database: database instance from which to extract extras
+        :raises CertificateException: If certificate is not valid/unparseable
+        :raises SupersetException: If database extra json payload is unparseable
+        """
+        try:
+            extra = json.loads(database.extra or "{}")
+        except json.JSONDecodeError:
+            raise SupersetException("Unable to parse database extras")
+
+        if database.server_cert:
+            engine_params = extra.get("engine_params", {})
+            connect_args = engine_params.get("connect_args", {})
+            connect_args["sslmode"] = connect_args.get("sslmode", "verify-full")
+            path = utils.create_ssl_cert_file(database.server_cert)
+            connect_args["sslrootcert"] = path
+            engine_params["connect_args"] = connect_args
+            extra["engine_params"] = engine_params
+        return extra
+
+    @classmethod
+    def get_column_spec(  # type: ignore
+        cls,
+        native_type: Optional[str],
+        source: utils.ColumnTypeSource = utils.ColumnTypeSource.GET_TABLE,
+        column_type_mappings: Tuple[
+            Tuple[
+                Pattern[str],
+                Union[TypeEngine, Callable[[Match[str]], TypeEngine]],
+                GenericDataType,
+            ],
+            ...,
+        ] = column_type_mappings,
+    ) -> Union[ColumnSpec, None]:
+
+        column_spec = super().get_column_spec(native_type)
+        if column_spec:
+            return column_spec
+
+        return super().get_column_spec(
+            native_type, column_type_mappings=column_type_mappings
+        )

@@ -18,7 +18,7 @@ import unittest
 
 import sqlparse
 
-from superset.sql_parse import ParsedQuery, Table
+from superset.sql_parse import ParsedQuery, strip_comments_from_sql, Table
 
 
 class TestSupersetSqlParse(unittest.TestCase):
@@ -157,6 +157,13 @@ class TestSupersetSqlParse(unittest.TestCase):
     def test_select_in_expression(self):
         query = "SELECT f1, (SELECT count(1) FROM t2) FROM t1"
         self.assertEqual({Table("t1"), Table("t2")}, self.extract_tables(query))
+
+        query = "SELECT f1, (SELECT count(1) FROM t2) as f2 FROM t1"
+        self.assertEqual({Table("t1"), Table("t2")}, self.extract_tables(query))
+
+    def test_parentheses(self):
+        query = "SELECT f1, (x + y) AS f2 FROM t1"
+        self.assertEqual({Table("t1")}, self.extract_tables(query))
 
     def test_union(self):
         query = "SELECT * FROM t1 UNION SELECT * FROM t2"
@@ -656,3 +663,95 @@ class TestSupersetSqlParse(unittest.TestCase):
         """
         parsed = ParsedQuery(query)
         self.assertEqual(parsed.is_explain(), False)
+
+    def test_is_valid_ctas(self):
+        """A valid CTAS has a SELECT as its last statement"""
+        query = "SELECT * FROM table"
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert parsed.is_valid_ctas()
+
+        query = """
+            -- comment
+            SELECT * FROM table
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert parsed.is_valid_ctas()
+
+        query = """
+            -- comment
+            SET @value = 42;
+            SELECT @value as foo;
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert parsed.is_valid_ctas()
+
+        query = """
+            -- comment
+            EXPLAIN SELECT * FROM table
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert not parsed.is_valid_ctas()
+
+        query = """
+            SELECT * FROM table;
+            INSERT INTO TABLE (foo) VALUES (42);
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert not parsed.is_valid_ctas()
+
+    def test_is_valid_cvas(self):
+        """A valid CVAS has a single SELECT statement"""
+        query = "SELECT * FROM table"
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert parsed.is_valid_cvas()
+
+        query = """
+            -- comment
+            SELECT * FROM table
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert parsed.is_valid_cvas()
+
+        query = """
+            -- comment
+            SET @value = 42;
+            SELECT @value as foo;
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert not parsed.is_valid_cvas()
+
+        query = """
+            -- comment
+            EXPLAIN SELECT * FROM table
+            -- comment 2
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert not parsed.is_valid_ctas()
+
+        query = """
+            SELECT * FROM table;
+            INSERT INTO TABLE (foo) VALUES (42);
+        """
+        parsed = ParsedQuery(query, strip_comments=True)
+        assert not parsed.is_valid_ctas()
+
+    def test_strip_comments_from_sql(self):
+        """Test that we are able to strip comments out of SQL stmts"""
+
+        assert (
+            strip_comments_from_sql("SELECT col1, col2 FROM table1")
+            == "SELECT col1, col2 FROM table1"
+        )
+        assert (
+            strip_comments_from_sql("SELECT col1, col2 FROM table1\n-- comment")
+            == "SELECT col1, col2 FROM table1\n"
+        )
+        assert (
+            strip_comments_from_sql("SELECT '--abc' as abc, col2 FROM table1\n")
+            == "SELECT '--abc' as abc, col2 FROM table1"
+        )

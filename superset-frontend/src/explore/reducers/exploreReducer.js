@@ -17,16 +17,24 @@
  * under the License.
  */
 /* eslint camelcase: 0 */
-import { getControlsState } from '../store';
+import { DYNAMIC_PLUGIN_CONTROLS_READY } from 'src/chart/chartAction';
+import { DEFAULT_TIME_RANGE } from 'src/explore/constants';
+import { getControlsState } from 'src/explore/store';
 import {
   getControlConfig,
   getFormDataFromControls,
   getControlStateFromControlConfig,
-} from '../controlUtils';
-import * as actions from '../actions/exploreActions';
+} from 'src/explore/controlUtils';
+import * as actions from 'src/explore/actions/exploreActions';
 
 export default function exploreReducer(state = {}, action) {
   const actionHandlers = {
+    [DYNAMIC_PLUGIN_CONTROLS_READY]() {
+      return {
+        ...state,
+        controls: action.controlsState,
+      };
+    },
     [actions.TOGGLE_FAVE_STAR]() {
       return {
         ...state,
@@ -54,8 +62,38 @@ export default function exploreReducer(state = {}, action) {
           delete newFormData.time_grain_sqla;
         }
       }
+
+      const controls = { ...state.controls };
+      if (
+        action.datasource.id !== state.datasource.id ||
+        action.datasource.type !== state.datasource.type
+      ) {
+        // reset time range filter to default
+        newFormData.time_range = DEFAULT_TIME_RANGE;
+
+        // reset control values for column/metric related controls
+        Object.entries(controls).forEach(([controlName, controlState]) => {
+          if (
+            // for direct column select controls
+            controlState.valueKey === 'column_name' ||
+            // for all other controls
+            'columns' in controlState
+          ) {
+            // if a control use datasource columns, reset its value to `undefined`,
+            // then `getControlsState` will pick up the default.
+            // TODO: filter out only invalid columns and keep others
+            controls[controlName] = {
+              ...controlState,
+              value: undefined,
+            };
+            newFormData[controlName] = undefined;
+          }
+        });
+      }
+
       const newState = {
         ...state,
+        controls,
         datasource: action.datasource,
         datasource_id: action.datasource.id,
         datasource_type: action.datasource.type,
@@ -76,12 +114,6 @@ export default function exploreReducer(state = {}, action) {
       return {
         ...state,
         datasources: action.datasources,
-      };
-    },
-    [actions.REMOVE_CONTROL_PANEL_ALERT]() {
-      return {
-        ...state,
-        controlPanelAlert: null,
       };
     },
     [actions.SET_FIELD_VALUE]() {
@@ -114,12 +146,25 @@ export default function exploreReducer(state = {}, action) {
       });
       const hasErrors = errors && errors.length > 0;
 
+      const currentControlsState =
+        action.controlName === 'viz_type' &&
+        action.value !== state.controls.viz_type.value
+          ? // rebuild the full control state if switching viz type
+            getControlsState(
+              state,
+              getFormDataFromControls({
+                ...state.controls,
+                viz_type: control,
+              }),
+            )
+          : state.controls;
+
       return {
         ...state,
         form_data: new_form_data,
         triggerRender: control.renderTrigger && !hasErrors,
         controls: {
-          ...state.controls,
+          ...currentControlsState,
           [action.controlName]: {
             ...control,
             validationErrors: errors,
@@ -139,15 +184,6 @@ export default function exploreReducer(state = {}, action) {
         sliceName: action.sliceName,
       };
     },
-    [actions.RESET_FIELDS]() {
-      return {
-        ...state,
-        controls: getControlsState(
-          state,
-          getFormDataFromControls(state.controls),
-        ),
-      };
-    },
     [actions.CREATE_NEW_SLICE]() {
       return {
         ...state,
@@ -165,6 +201,7 @@ export default function exploreReducer(state = {}, action) {
           ...state.slice,
           ...action.slice,
         },
+        sliceName: action.slice.slice_name ?? state.sliceName,
       };
     },
   };

@@ -24,8 +24,9 @@ from flask_babel import ngettext
 from marshmallow import ValidationError
 
 from superset.charts.filters import ChartFilter
-from superset.constants import RouteMethod
+from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.dashboards.filters import DashboardFilter
+from superset.databases.filters import DatabaseFilter
 from superset.models.reports import ReportSchedule
 from superset.reports.commands.bulk_delete import BulkDeleteReportScheduleCommand
 from superset.reports.commands.create import CreateReportScheduleCommand
@@ -34,6 +35,7 @@ from superset.reports.commands.exceptions import (
     ReportScheduleBulkDeleteFailedError,
     ReportScheduleCreateFailedError,
     ReportScheduleDeleteFailedError,
+    ReportScheduleForbiddenError,
     ReportScheduleInvalidError,
     ReportScheduleNotFoundError,
     ReportScheduleUpdateFailedError,
@@ -46,7 +48,12 @@ from superset.reports.schemas import (
     ReportSchedulePostSchema,
     ReportSchedulePutSchema,
 )
-from superset.views.base_api import BaseSupersetModelRestApi, statsd_metrics
+from superset.views.base_api import (
+    BaseSupersetModelRestApi,
+    RelatedFieldFilter,
+    statsd_metrics,
+)
+from superset.views.filters import FilterRelatedOwners
 
 logger = logging.getLogger(__name__)
 
@@ -59,34 +66,40 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         "bulk_delete",  # not using RouteMethod since locally defined
     }
     class_permission_name = "ReportSchedule"
+    method_permission_name = MODEL_API_RW_METHOD_PERMISSION_MAP
     resource_name = "report"
     allow_browser_login = True
 
     show_columns = [
         "id",
-        "name",
-        "type",
-        "description",
-        "context_markdown",
         "active",
-        "crontab",
         "chart.id",
+        "chart.slice_name",
+        "context_markdown",
+        "crontab",
+        "dashboard.dashboard_title",
         "dashboard.id",
+        "database.database_name",
         "database.id",
-        "owners.id",
-        "owners.first_name",
-        "owners.last_name",
+        "description",
+        "grace_period",
         "last_eval_dttm",
         "last_state",
         "last_value",
         "last_value_row_json",
-        "validator_type",
-        "validator_config_json",
         "log_retention",
-        "grace_period",
+        "name",
+        "owners.first_name",
+        "owners.id",
+        "owners.last_name",
         "recipients.id",
-        "recipients.type",
         "recipients.recipient_config_json",
+        "recipients.type",
+        "sql",
+        "type",
+        "validator_config_json",
+        "validator_type",
+        "working_timeout",
     ]
     show_select_columns = show_columns + [
         "chart.datasource_id",
@@ -102,6 +115,7 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         "created_by.last_name",
         "created_on",
         "crontab",
+        "crontab_humanized",
         "id",
         "last_eval_dttm",
         "last_state",
@@ -128,6 +142,7 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         "recipients",
         "sql",
         "type",
+        "working_timeout",
         "validator_config_json",
         "validator_type",
     ]
@@ -142,17 +157,31 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         "changed_on",
         "changed_on_delta_humanized",
         "created_on",
+        "crontab",
+        "last_eval_dttm",
         "name",
         "type",
+        "crontab_humanized",
     ]
     search_columns = ["name", "active", "created_by", "type", "last_state"]
     search_filters = {"name": [ReportScheduleAllTextFilter]}
-    allowed_rel_fields = {"created_by", "chart", "dashboard"}
+    allowed_rel_fields = {"owners", "chart", "dashboard", "database", "created_by"}
     filter_rel_fields = {
         "chart": [["id", ChartFilter, lambda: []]],
         "dashboard": [["id", DashboardFilter, lambda: []]],
+        "database": [["id", DatabaseFilter, lambda: []]],
     }
-    text_field_rel_fields = {"dashboard": "dashboard_title"}
+    text_field_rel_fields = {
+        "dashboard": "dashboard_title",
+        "chart": "slice_name",
+        "database": "database_name",
+    }
+    related_field_filters = {
+        "dashboard": "dashboard_title",
+        "chart": "slice_name",
+        "database": "database_name",
+        "owners": RelatedFieldFilter("first_name", FilterRelatedOwners),
+    }
 
     apispec_parameter_schemas = {
         "get_delete_ids_schema": get_delete_ids_schema,
@@ -187,6 +216,8 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
                     properties:
                       message:
                         type: string
+            403:
+              $ref: '#/components/responses/403'
             404:
               $ref: '#/components/responses/404'
             422:
@@ -197,8 +228,10 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
         try:
             DeleteReportScheduleCommand(g.user, pk).run()
             return self.response(200, message="OK")
-        except ReportScheduleNotFoundError as ex:
+        except ReportScheduleNotFoundError:
             return self.response_404()
+        except ReportScheduleForbiddenError:
+            return self.response_403()
         except ReportScheduleDeleteFailedError as ex:
             logger.error(
                 "Error deleting report schedule %s: %s",
@@ -273,7 +306,7 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @permission_name("put")
-    def put(self, pk: int) -> Response:
+    def put(self, pk: int) -> Response:  # pylint: disable=too-many-return-statements
         """Updates an Report Schedule
         ---
         put:
@@ -308,6 +341,8 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
               $ref: '#/components/responses/400'
             401:
               $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
             404:
               $ref: '#/components/responses/404'
             500:
@@ -327,6 +362,8 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
             return self.response_404()
         except ReportScheduleInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
+        except ReportScheduleForbiddenError:
+            return self.response_403()
         except ReportScheduleUpdateFailedError as ex:
             logger.error(
                 "Error updating report %s: %s", self.__class__.__name__, str(ex)
@@ -363,6 +400,8 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
                         type: string
             401:
               $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
             404:
               $ref: '#/components/responses/404'
             422:
@@ -383,5 +422,7 @@ class ReportScheduleRestApi(BaseSupersetModelRestApi):
             )
         except ReportScheduleNotFoundError:
             return self.response_404()
+        except ReportScheduleForbiddenError:
+            return self.response_403()
         except ReportScheduleBulkDeleteFailedError as ex:
             return self.response_422(message=str(ex))

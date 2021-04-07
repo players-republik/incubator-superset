@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { NavItem } from 'react-bootstrap';
 import { Menu } from 'src/common/components';
 import NavDropdown from '../NavDropdown';
@@ -27,13 +28,10 @@ export interface MenuObjectChildProps {
   icon: string;
   index: number;
   url?: string;
+  isFrontendRoute?: boolean;
 }
 
-export interface MenuObjectProps {
-  label?: string;
-  icon?: string;
-  index: number;
-  url?: string;
+export interface MenuObjectProps extends MenuObjectChildProps {
   childs?: (MenuObjectChildProps | string)[];
   isHeader?: boolean;
 }
@@ -43,7 +41,18 @@ export default function MenuObject({
   childs,
   url,
   index,
+  isFrontendRoute,
 }: MenuObjectProps) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  if (url && isFrontendRoute) {
+    return (
+      <li role="presentation">
+        <Link role="button" to={url}>
+          {label}
+        </Link>
+      </li>
+    );
+  }
   if (url) {
     return (
       <NavItem eventKey={index} href={url}>
@@ -53,7 +62,14 @@ export default function MenuObject({
   }
 
   return (
-    <NavDropdown id={`menu-dropdown-${label}`} title={label}>
+    <NavDropdown
+      id={`menu-dropdown-${label}`}
+      title={label}
+      onMouseEnter={() => setDropdownOpen(true)}
+      onMouseLeave={() => setDropdownOpen(false)}
+      onToggle={value => setDropdownOpen(value)}
+      open={dropdownOpen}
+    >
       <Menu>
         {childs?.map((child: MenuObjectChildProps | string, index1: number) => {
           if (typeof child === 'string' && child === '-') {
@@ -62,7 +78,11 @@ export default function MenuObject({
           if (typeof child !== 'string') {
             return (
               <Menu.Item key={`${child.label}`}>
-                <a href={child.url}>&nbsp; {child.label}</a>
+                {child.isFrontendRoute ? (
+                  <Link to={child.url || ''}>{child.label}</Link>
+                ) : (
+                  <a href={child.url}>{child.label}</a>
+                )}
               </Menu.Item>
             );
           }

@@ -29,7 +29,7 @@ import {
   updateDirectPathToFilter,
 } from './dashboardFilters';
 import { applyDefaultFormData } from '../../explore/store';
-import getClientErrorObject from '../../utils/getClientErrorObject';
+import { getClientErrorObject } from '../../utils/getClientErrorObject';
 import { SAVE_TYPE_OVERWRITE } from '../util/constants';
 import {
   addSuccessToast,
@@ -180,7 +180,7 @@ export function saveDashboardRequest(data, id, saveType) {
     Object.values(dashboardFilters).forEach(filter => {
       const { chartId } = filter;
       const componentId = filter.directPathToFilter.slice().pop();
-      const directPathToFilter = (layout[componentId].parents || []).slice();
+      const directPathToFilter = (layout[componentId]?.parents || []).slice();
       directPathToFilter.push(componentId);
       dispatch(updateDirectPathToFilter(chartId, directPathToFilter));
     });

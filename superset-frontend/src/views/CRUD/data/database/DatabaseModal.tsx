@@ -17,11 +17,13 @@
  * under the License.
  */
 import React, { FunctionComponent, useState, useEffect } from 'react';
-import { styled, t, SupersetClient } from '@superset-ui/core';
+import { styled, t } from '@superset-ui/core';
 import InfoTooltip from 'src/common/components/InfoTooltip';
-import { useSingleViewResource } from 'src/views/CRUD/hooks';
+import {
+  useSingleViewResource,
+  testDatabaseConnection,
+} from 'src/views/CRUD/hooks';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
-import getClientErrorObject from 'src/utils/getClientErrorObject';
 import Icon from 'src/components/Icon';
 import Modal from 'src/common/components/Modal';
 import Tabs from 'src/common/components/Tabs';
@@ -29,6 +31,7 @@ import Button from 'src/components/Button';
 import IndeterminateCheckbox from 'src/components/IndeterminateCheckbox';
 import { JsonEditor } from 'src/components/AsyncAceEditor';
 import { DatabaseObject } from './types';
+import { useCommonConf } from './state';
 
 interface DatabaseModalProps {
   addDangerToast: (msg: string) => void;
@@ -39,6 +42,10 @@ interface DatabaseModalProps {
   database?: DatabaseObject | null; // If included, will go into edit mode
 }
 
+const DEFAULT_TAB_KEY = '1';
+const EXPOSE_SQLLAB_FORM_HEIGHT = '270px';
+const CTAS_CVAS_SCHEMA_FORM_HEIGHT = '94px';
+
 const StyledIcon = styled(Icon)`
   margin: auto ${({ theme }) => theme.gridUnit * 2}px auto 0;
 `;
@@ -48,6 +55,17 @@ const StyledInputContainer = styled.div`
 
   &.extra-container {
     padding-top: 8px;
+  }
+
+  &.expandable {
+    height: 0;
+    overflow: hidden;
+    transition: height 0.25s;
+    margin-left: ${({ theme }) => theme.gridUnit * 8}px;
+    padding: 0;
+    &.open {
+      height: ${CTAS_CVAS_SCHEMA_FORM_HEIGHT};
+    }
   }
 
   .helper {
@@ -65,11 +83,14 @@ const StyledInputContainer = styled.div`
 
   .input-container {
     display: flex;
-    align-items: center;
+    align-items: top;
 
     label {
       display: flex;
-      margin-right: ${({ theme }) => theme.gridUnit * 2}px;
+      margin-left: ${({ theme }) => theme.gridUnit * 2}px;
+      margin-top: ${({ theme }) => theme.gridUnit * 0.75}px;
+      font-family: ${({ theme }) => theme.typography.families.sansSerif};
+      font-size: ${({ theme }) => theme.typography.sizes.m}px;
     }
 
     i {
@@ -118,6 +139,23 @@ const StyledJsonEditor = styled(JsonEditor)`
   border-radius: ${({ theme }) => theme.gridUnit}px;
 `;
 
+const StyledExpandableForm = styled.div`
+  padding-top: ${({ theme }) => theme.gridUnit}px;
+  .input-container {
+    padding-top: ${({ theme }) => theme.gridUnit}px;
+    padding-bottom: ${({ theme }) => theme.gridUnit}px;
+  }
+  &.expandable {
+    height: 0;
+    overflow: hidden;
+    transition: height 0.25s;
+    margin-left: ${({ theme }) => theme.gridUnit * 7}px;
+    &.open {
+      height: ${EXPOSE_SQLLAB_FORM_HEIGHT};
+    }
+  }
+`;
+
 const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
   addDangerToast,
   addSuccessToast,
@@ -129,6 +167,8 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
   const [disableSave, setDisableSave] = useState<boolean>(true);
   const [db, setDB] = useState<DatabaseObject | null>(null);
   const [isHidden, setIsHidden] = useState<boolean>(true);
+  const [tabKey, setTabKey] = useState<string>(DEFAULT_TAB_KEY);
+  const conf = useCommonConf();
 
   const isEditMode = database !== null;
   const defaultExtra =
@@ -157,34 +197,16 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
     const connection = {
       sqlalchemy_uri: db ? db.sqlalchemy_uri : '',
       database_name:
-        db && db.database_name.length ? db.database_name : undefined,
+        db && db.database_name.trim().length
+          ? db.database_name.trim()
+          : undefined,
       impersonate_user: db ? db.impersonate_user || undefined : undefined,
       extra: db && db.extra && db.extra.length ? db.extra : undefined,
       encrypted_extra: db ? db.encrypted_extra || undefined : undefined,
       server_cert: db ? db.server_cert || undefined : undefined,
     };
 
-    SupersetClient.post({
-      endpoint: 'api/v1/database/test_connection',
-      body: JSON.stringify(connection),
-      headers: { 'Content-Type': 'application/json' },
-    })
-      .then(() => {
-        addSuccessToast(t('Connection looks good!'));
-      })
-      .catch(response =>
-        getClientErrorObject(response).then(error => {
-          addDangerToast(
-            error?.message
-              ? `${t('ERROR: ')}${
-                  typeof error.message === 'string'
-                    ? error.message
-                    : (error.message as Record<string, string[]>).sqlalchemy_uri
-                }`
-              : t('ERROR: Connection failed. '),
-          );
-        }),
-      );
+    testDatabaseConnection(connection, addDangerToast, addSuccessToast);
   };
 
   // Functions
@@ -197,7 +219,7 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
     if (isEditMode) {
       // Edit
       const update: DatabaseObject = {
-        database_name: db ? db.database_name : '',
+        database_name: db ? db.database_name.trim() : '',
         sqlalchemy_uri: db ? db.sqlalchemy_uri : '',
         ...db,
       };
@@ -219,6 +241,7 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
       }
     } else if (db) {
       // Create
+      db.database_name = db.database_name.trim();
       createResource(db).then(dbId => {
         if (dbId) {
           if (onDatabaseAdd) {
@@ -232,17 +255,17 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
 
   const onInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { target } = event;
+    const { checked, name, value, type } = target;
     const data = {
-      database_name: db ? db.database_name : '',
-      sqlalchemy_uri: db ? db.sqlalchemy_uri : '',
+      database_name: db?.database_name || '',
+      sqlalchemy_uri: db?.sqlalchemy_uri || '',
       ...db,
     };
 
-    if (target.type === 'checkbox') {
-      data[target.name] = target.checked;
+    if (type === 'checkbox') {
+      data[name] = checked;
     } else {
-      data[target.name] =
-        typeof target.value === 'string' ? target.value.trim() : target.value;
+      data[name] = value;
     }
 
     setDB(data);
@@ -250,20 +273,21 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
 
   const onTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const { target } = event;
+    const { name, value } = target;
     const data = {
-      database_name: db ? db.database_name : '',
-      sqlalchemy_uri: db ? db.sqlalchemy_uri : '',
+      database_name: db?.database_name || '',
+      sqlalchemy_uri: db?.sqlalchemy_uri || '',
       ...db,
     };
 
-    data[target.name] = target.value;
+    data[name] = value;
     setDB(data);
   };
 
   const onEditorChange = (json: string, name: string) => {
     const data = {
-      database_name: db ? db.database_name : '',
-      sqlalchemy_uri: db ? db.sqlalchemy_uri : '',
+      database_name: db?.database_name || '',
+      sqlalchemy_uri: db?.sqlalchemy_uri || '',
       ...db,
     };
 
@@ -274,7 +298,7 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
   const validate = () => {
     if (
       db &&
-      db.database_name.length &&
+      db.database_name.trim().length &&
       db.sqlalchemy_uri &&
       db.sqlalchemy_uri.length
     ) {
@@ -287,16 +311,27 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
   // Initialize
   if (
     isEditMode &&
-    (!db || !db.id || (database && database.id !== db.id) || (isHidden && show))
+    (!db || !db.id || database?.id !== db.id || (isHidden && show))
   ) {
-    if (database && database.id !== null && !dbLoading) {
+    if (database?.id && !dbLoading) {
       const id = database.id || 0;
+      setTabKey(DEFAULT_TAB_KEY);
 
-      fetchResource(id).then(() => {
-        setDB(dbFetched);
-      });
+      fetchResource(id)
+        .then(() => {
+          setDB(dbFetched);
+        })
+        .catch(e =>
+          addDangerToast(
+            t(
+              'Sorry there was an error fetching database information: %s',
+              e.message,
+            ),
+          ),
+        );
     }
   } else if (!isEditMode && (!db || db.id || (isHidden && show))) {
+    setTabKey(DEFAULT_TAB_KEY);
     setDB({
       database_name: '',
       sqlalchemy_uri: '',
@@ -306,12 +341,19 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
   // Validation
   useEffect(() => {
     validate();
-  }, [db ? db.database_name : null, db ? db.sqlalchemy_uri : null]);
+  }, [db?.database_name || null, db?.sqlalchemy_uri || null]);
 
   // Show/hide
   if (isHidden && show) {
     setIsHidden(false);
   }
+
+  const tabChange = (key: string) => {
+    setTabKey(key);
+  };
+
+  const expandableModalIsOpen = !!db?.expose_in_sqllab;
+  const createAsOpen = !!(db?.allow_ctas || db?.allow_cvas);
 
   return (
     <Modal
@@ -326,11 +368,15 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
       title={
         <h4>
           <StyledIcon name="database" />
-          {isEditMode ? t('Edit Database') : t('Add Database')}
+          {isEditMode ? t('Edit database') : t('Add database')}
         </h4>
       }
     >
-      <Tabs defaultActiveKey="1">
+      <Tabs
+        defaultActiveKey={DEFAULT_TAB_KEY}
+        activeKey={tabKey}
+        onTabClick={tabChange}
+      >
         <Tabs.TabPane
           tab={
             <span>
@@ -342,14 +388,14 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
         >
           <StyledInputContainer>
             <div className="control-label">
-              {t('Database Name')}
+              {t('Database name')}
               <span className="required">*</span>
             </div>
             <div className="input-container">
               <input
                 type="text"
                 name="database_name"
-                value={db ? db.database_name : ''}
+                value={db?.database_name || ''}
                 placeholder={t('Name your dataset')}
                 onChange={onInputChange}
               />
@@ -364,7 +410,7 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
               <input
                 type="text"
                 name="sqlalchemy_uri"
-                value={db ? db.sqlalchemy_uri : ''}
+                value={db?.sqlalchemy_uri || ''}
                 autoComplete="off"
                 placeholder={t(
                   'dialect+driver://username:password@host:port/database',
@@ -372,17 +418,17 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
                 onChange={onInputChange}
               />
               <Button buttonStyle="primary" onClick={testConnection} cta>
-                {t('Test Connection')}
+                {t('Test connection')}
               </Button>
             </div>
             <div className="helper">
               {t('Refer to the ')}
               <a
-                href="https://docs.sqlalchemy.org/en/rel_1_2/core/engines.html#"
+                href={conf?.SQLALCHEMY_DOCS_URL ?? ''}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                {t('SQLAlchemy docs')}
+                {conf?.SQLALCHEMY_DISPLAY_TEXT ?? ''}
               </a>
               {t(' for more information on how to structure your URI.')}
             </div>
@@ -390,13 +436,13 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
         </Tabs.TabPane>
         <Tabs.TabPane tab={<span>{t('Performance')}</span>} key="2">
           <StyledInputContainer>
-            <div className="control-label">{t('Chart Cache Timeout')}</div>
+            <div className="control-label">{t('Chart cache timeout')}</div>
             <div className="input-container">
               <input
                 type="number"
                 name="cache_timeout"
-                value={db ? db.cache_timeout || '' : ''}
-                placeholder={t('Chart Cache Timeout')}
+                value={db?.cache_timeout || ''}
+                placeholder={t('Chart cache timeout')}
                 onChange={onInputChange}
               />
             </div>
@@ -413,10 +459,10 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
               <IndeterminateCheckbox
                 id="allow_run_async"
                 indeterminate={false}
-                checked={db ? !!db.allow_run_async : false}
+                checked={!!db?.allow_run_async}
                 onChange={onInputChange}
+                labelText={t('Asynchronous query execution')}
               />
-              <div>{t('Asynchronous Query Execution')}</div>
               <InfoTooltip
                 tooltip={t(
                   'Operate the database in asynchronous mode, meaning that the queries ' +
@@ -428,110 +474,124 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
             </div>
           </StyledInputContainer>
         </Tabs.TabPane>
-        <Tabs.TabPane tab={<span>{t('SQL Lab Settings')}</span>} key="3">
+        <Tabs.TabPane tab={<span>{t('SQL Lab settings')}</span>} key="3">
           <StyledInputContainer>
             <StyledInputContainer>
               <div className="input-container">
                 <IndeterminateCheckbox
                   id="expose_in_sqllab"
                   indeterminate={false}
-                  checked={db ? !!db.expose_in_sqllab : false}
+                  checked={!!db?.expose_in_sqllab}
                   onChange={onInputChange}
+                  labelText={t('Expose in SQL Lab')}
                 />
-                <div>{t('Expose in SQL Lab')}</div>
-                <InfoTooltip tooltip={t('Expose this DB in SQL Lab')} />
-              </div>
-            </StyledInputContainer>
-            <StyledInputContainer>
-              <div className="input-container">
-                <IndeterminateCheckbox
-                  id="allow_ctas"
-                  indeterminate={false}
-                  checked={db ? !!db.allow_ctas : false}
-                  onChange={onInputChange}
-                />
-                <div>{t('Allow CREATE TABLE AS')}</div>
                 <InfoTooltip
-                  tooltip={t('Allow CREATE TABLE AS option in SQL Lab')}
+                  tooltip={t('Allow this database to be queried in SQL Lab')}
                 />
               </div>
+              <StyledExpandableForm
+                className={`expandable ${expandableModalIsOpen ? 'open' : ''}`}
+              >
+                <StyledInputContainer>
+                  <div className="input-container">
+                    <IndeterminateCheckbox
+                      id="allow_ctas"
+                      indeterminate={false}
+                      checked={!!db?.allow_ctas}
+                      onChange={onInputChange}
+                      labelText={t('Allow CREATE TABLE AS')}
+                    />
+                    <InfoTooltip
+                      tooltip={t(
+                        'Allow creation of new tables based on queries',
+                      )}
+                    />
+                  </div>
+                </StyledInputContainer>
+                <StyledInputContainer>
+                  <div className="input-container">
+                    <IndeterminateCheckbox
+                      id="allow_cvas"
+                      indeterminate={false}
+                      checked={!!db?.allow_cvas}
+                      onChange={onInputChange}
+                      labelText={t('Allow CREATE VIEW AS')}
+                    />
+                    <InfoTooltip
+                      tooltip={t(
+                        'Allow creation of new views based on queries',
+                      )}
+                    />
+                  </div>
+                  <StyledInputContainer
+                    className={`expandable ${createAsOpen ? 'open' : ''}`}
+                  >
+                    <div className="control-label">
+                      {t('CTAS & CVAS SCHEMA')}
+                    </div>
+                    <div className="input-container">
+                      <input
+                        type="text"
+                        name="force_ctas_schema"
+                        value={db?.force_ctas_schema || ''}
+                        placeholder={t('Search or select schema')}
+                        onChange={onInputChange}
+                      />
+                    </div>
+                    <div className="helper">
+                      {t(
+                        'When allowing CREATE TABLE AS option in SQL Lab, this option ' +
+                          'forces the table to be created in this schema.',
+                      )}
+                    </div>
+                  </StyledInputContainer>
+                </StyledInputContainer>
+                <StyledInputContainer>
+                  <div className="input-container">
+                    <IndeterminateCheckbox
+                      id="allow_dml"
+                      indeterminate={false}
+                      checked={!!db?.allow_dml}
+                      onChange={onInputChange}
+                      labelText={t('Allow DML')}
+                    />
+                    <InfoTooltip
+                      tooltip={t(
+                        'Allow manipulation of the database using non-SELECT statements such as UPDATE, DELETE, CREATE, etc.',
+                      )}
+                    />
+                  </div>
+                </StyledInputContainer>
+                <StyledInputContainer>
+                  <div className="input-container">
+                    <IndeterminateCheckbox
+                      id="allow_multi_schema_metadata_fetch"
+                      indeterminate={false}
+                      checked={!!db?.allow_multi_schema_metadata_fetch}
+                      onChange={onInputChange}
+                      labelText={t('Allow multi schema metadata fetch')}
+                    />
+                    <InfoTooltip
+                      tooltip={t(
+                        'Allow SQL Lab to fetch a list of all tables and all views across all database ' +
+                          'schemas. For large data warehouse with thousands of tables, this can be ' +
+                          'expensive and put strain on the system.',
+                      )}
+                    />
+                  </div>
+                </StyledInputContainer>
+              </StyledExpandableForm>
             </StyledInputContainer>
-            <StyledInputContainer>
-              <div className="input-container">
-                <IndeterminateCheckbox
-                  id="allow_cvas"
-                  indeterminate={false}
-                  checked={db ? !!db.allow_cvas : false}
-                  onChange={onInputChange}
-                />
-                <div>{t('Allow CREATE VIEW AS')}</div>
-                <InfoTooltip
-                  tooltip={t('Allow CREATE VIEW AS option in SQL Lab')}
-                />
-              </div>
-            </StyledInputContainer>
-            <StyledInputContainer>
-              <div className="input-container">
-                <IndeterminateCheckbox
-                  id="allow_dml"
-                  indeterminate={false}
-                  checked={db ? !!db.allow_dml : false}
-                  onChange={onInputChange}
-                />
-                <div>{t('Allow DML')}</div>
-                <InfoTooltip
-                  tooltip={t(
-                    'Allow users to run non-SELECT statements (UPDATE, DELETE, CREATE, ...)',
-                  )}
-                />
-              </div>
-            </StyledInputContainer>
-            <StyledInputContainer>
-              <div className="input-container">
-                <IndeterminateCheckbox
-                  id="allow_multi_schema_metadata_fetch"
-                  indeterminate={false}
-                  checked={db ? !!db.allow_multi_schema_metadata_fetch : false}
-                  onChange={onInputChange}
-                />
-                <div>{t('Allow Multi Schema Metadata Fetch')}</div>
-                <InfoTooltip
-                  tooltip={t(
-                    'Allow SQL Lab to fetch a list of all tables and all views across all database ' +
-                      'schemas. For large data warehouse with thousands of tables, this can be ' +
-                      'expensive and put strain on the system.',
-                  )}
-                />
-              </div>
-            </StyledInputContainer>
-          </StyledInputContainer>
-          <StyledInputContainer>
-            <div className="control-label">{t('CTAS Schema')}</div>
-            <div className="input-container">
-              <input
-                type="text"
-                name="force_ctas_schema"
-                value={db ? db.force_ctas_schema || '' : ''}
-                placeholder={t('CTAS Schema')}
-                onChange={onInputChange}
-              />
-            </div>
-            <div className="helper">
-              {t(
-                'When allowing CREATE TABLE AS option in SQL Lab, this option ' +
-                  'forces the table to be created in this schema.',
-              )}
-            </div>
           </StyledInputContainer>
         </Tabs.TabPane>
         <Tabs.TabPane tab={<span>{t('Security')}</span>} key="4">
           <StyledInputContainer>
-            <div className="control-label">{t('Secure Extra')}</div>
+            <div className="control-label">{t('Secure extra')}</div>
             <div className="input-container">
               <StyledJsonEditor
                 name="encrypted_extra"
-                value={db ? db.encrypted_extra || '' : ''}
-                placeholder={t('Secure Extra')}
+                value={db?.encrypted_extra || ''}
+                placeholder={t('Secure extra')}
                 onChange={(json: string) =>
                   onEditorChange(json, 'encrypted_extra')
                 }
@@ -555,12 +615,12 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
             </div>
           </StyledInputContainer>
           <StyledInputContainer>
-            <div className="control-label">{t('Root Certificate')}</div>
+            <div className="control-label">{t('Root certificate')}</div>
             <div className="input-container">
               <textarea
                 name="server_cert"
-                value={db ? db.server_cert || '' : ''}
-                placeholder={t('Root Certificate')}
+                value={db?.server_cert || ''}
+                placeholder={t('Root certificate')}
                 onChange={onTextChange}
               />
             </div>
@@ -578,10 +638,10 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
               <IndeterminateCheckbox
                 id="impersonate_user"
                 indeterminate={false}
-                checked={db ? !!db.impersonate_user : false}
+                checked={!!db?.impersonate_user}
                 onChange={onInputChange}
+                labelText={t('Impersonate Logged In User (Presto & Hive)')}
               />
-              <div>{t('Impersonate Logged In User (Presto & Hive)')}</div>
               <InfoTooltip
                 tooltip={t(
                   'If Presto, all the queries in SQL Lab are going to be executed as the ' +
@@ -598,10 +658,10 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
               <IndeterminateCheckbox
                 id="allow_csv_upload"
                 indeterminate={false}
-                checked={db ? !!db.allow_csv_upload : false}
+                checked={!!db?.allow_csv_upload}
                 onChange={onInputChange}
+                labelText={t('Allow data upload')}
               />
-              <div>{t('Allow Data Upload')}</div>
               <InfoTooltip
                 tooltip={t(
                   'If selected, please set the schemas allowed for data upload in Extra.',
@@ -614,8 +674,8 @@ const DatabaseModal: FunctionComponent<DatabaseModalProps> = ({
             <div className="input-container">
               <StyledJsonEditor
                 name="extra"
-                value={(db && db.extra) ?? defaultExtra}
-                placeholder={t('Secure Extra')}
+                value={db?.extra ?? defaultExtra}
+                placeholder={t('Secure extra')}
                 onChange={(json: string) => onEditorChange(json, 'extra')}
                 width="100%"
                 height="160px"
